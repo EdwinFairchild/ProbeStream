@@ -29,6 +29,7 @@ interface Props {
   downChannel: number;
   recentCommands: CommandHistoryEntry[];
   recentCommandsCollapsed: boolean;
+  clearSignal: number;
 }
 
 export type StreamChannelLayout = "single" | "merge" | "split";
@@ -54,6 +55,7 @@ export function StreamPage({
   downChannel,
   recentCommands,
   recentCommandsCollapsed,
+  clearSignal,
 }: Props) {
   const [status, setStatus] = useState<StreamStatus | null>(null);
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus | null>(null);
@@ -66,6 +68,14 @@ export function StreamPage({
   useEffect(() => {
     bufferRef.current = new ChunkRingBuffer(maxBufferedChunks);
   }, [maxBufferedChunks]);
+
+  useEffect(() => {
+    bufferRef.current.clear();
+    bytesRef.current = 0;
+    rateSamplesRef.current = [];
+    setThroughput(0);
+    setRenderSeq((s) => s + 1);
+  }, [clearSignal]);
 
   useEffect(() => {
     let cancelled = false;

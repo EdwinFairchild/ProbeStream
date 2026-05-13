@@ -1,8 +1,8 @@
 # ProbeStream TUI Quick Start
 
-This guide gets the ProbeStream TUI from zero to a live stream without using the Splash page auto-start shortcut.
 
-## 1. Download the TUI
+## 1. Get or build The TUI
+### Option 1. Download the TUI prebuilt binary
 
 Download the latest platform bundle from the [ProbeStream releases page](https://github.com/EdwinFairchild/ProbeStream/releases/latest):
 
@@ -11,13 +11,16 @@ Download the latest platform bundle from the [ProbeStream releases page](https:/
 
 Extract it somewhere convenient. Release builds include the Bun-compiled TUI binary, so you do not need to install Bun.
 
+> [!WARNING]
+> Windows may warn that the downloaded binary does not have a code-signing certificate. If that bothers you, build it yourself from source using Option 2 below.
+
 You still need:
 
 - Python 3.10+ on PATH for the bundled sidecar
 - OpenOCD installed or available through STM32CubeIDE
 - A terminal with good keyboard support, such as Windows Terminal, WezTerm, kitty, ghostty, or Alacritty
 
-### Source install for development
+### Option 2. Install dependencies and build or run from source
 
 If you are modifying the TUI or building your own binary, clone the repository and run the dependency installer from the repository root:
 
@@ -96,6 +99,9 @@ Ctrl+U         Clear current edit buffer
 ```
 
 Settings persist to `~/.config/probestream-tui/settings.json` on Linux/macOS, or `%USERPROFILE%\.config\probestream-tui\settings.json` on Windows.
+
+> [!TIP]
+> Once `openocdPath`, `openocdScriptsPath`, `interfaceConfig`, and `targetConfig` are set, and your hardware is connected, you can usually skip the manual OpenOCD/scan/stream steps below. Go to the Splash page and press `Enter` to use auto-start mode.
 
 ## 4. Select a Probe
 
@@ -212,6 +218,10 @@ Leave terminal mode:
 
 ## 9. Stop Cleanly
 
+For normal sessions, just quit the TUI. It cleans up the OpenOCD process that it started.
+
+Use the manual stop commands mainly when you are switching probes, hopping between sessions, or intentionally managing OpenOCD yourself.
+
 Stop streaming:
 
 ```text
@@ -234,7 +244,7 @@ or press `Ctrl+C` twice.
 
 ## Manual Happy Path
 
-Once settings are saved, the usual manual startup sequence is:
+Once settings are saved, the Splash page `Enter` shortcut is usually the fastest path. If you need to step through startup manually, use:
 
 ```text
 /openocd start

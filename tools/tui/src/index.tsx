@@ -33,6 +33,18 @@ const supervised = await ensureSidecar({
   process.exit(1);
 });
 
+// Drop any SSE backlog the sidecar may still hold from a previous TUI
+// session (the supervisor reuses an already-running sidecar if one is
+// listening on the bridge port). Without this the StreamPage would
+// instantly replay stale batches on launch.
+try {
+  await client.streamClear();
+} catch {
+  // Sidecar may not be ready yet for RPC; harmless — backlog will just
+  // be whatever the previous session left, which the user can flush
+  // manually with /clear.
+}
+
 function Root({ onQuit }: { onQuit: () => void }) {
   return (
     <AppFrame
@@ -42,6 +54,9 @@ function Root({ onQuit }: { onQuit: () => void }) {
       subscribeSidecarLog={(listener) => {
         sidecarLogListeners.add(listener);
         return () => sidecarLogListeners.delete(listener);
+      }}
+      clearSidecarLog={() => {
+        sidecarLog.length = 0;
       }}
     />
   );

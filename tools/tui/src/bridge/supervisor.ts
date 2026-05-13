@@ -119,9 +119,30 @@ async function waitForHealth(baseUrl: string, deadline: number): Promise<boolean
   return false;
 }
 
+async function sidecarRpc(baseUrl: string, method: string, params: Record<string, unknown> = {}): Promise<void> {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 1_000);
+  try {
+    await fetch(`${baseUrl}/rpc`, {
+      method: "POST",
+      signal: ctl.signal,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ method, params }),
+    });
+  } catch {
+    // Best-effort lifecycle RPC. If the sidecar is already gone, cleanup won.
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function ensureSidecar(opts: SupervisorOptions): Promise<SupervisedSidecar> {
   if (await ping(opts.baseUrl)) {
-    return { spawned: false, stop: () => {} };
+    await sidecarRpc(opts.baseUrl, "sidecar.claim", { parentPid: process.pid });
+    return {
+      spawned: false,
+      stop: () => { void sidecarRpc(opts.baseUrl, "sidecar.shutdown"); },
+    };
   }
 
   const resolved = resolveLauncher(opts.launcher);
@@ -129,6 +150,10 @@ export async function ensureSidecar(opts: SupervisorOptions): Promise<Supervised
   const spawnArgs = [...resolved.args, ...extraArgs];
   const spawnOpts: import("node:child_process").SpawnOptions = {
     stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      PSTUI_PARENT_PID: String(process.pid),
+    },
     // Suppress any console window on Windows. Combined with NOT setting
     // detached:true on Windows, this keeps the python sidecar fully hidden.
     windowsHide: true,

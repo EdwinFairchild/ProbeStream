@@ -588,6 +588,14 @@ def _quiesce_openocd_for_streaming() -> Optional[str]:
 
 def rpc_dispatch(method: str, params: dict) -> Any:
     global current_settings
+    if method == "sidecar.claim":
+        _start_parent_watchdog(_request_shutdown, _coerce_int(params.get("parentPid"), 0))
+        return {"ok": True, "pid": os.getpid()}
+
+    if method == "sidecar.shutdown":
+        _request_shutdown()
+        return {"ok": True}
+
     # -- Debug probes --
     if method == "probes.discover":
         return discover_debug_probes()
@@ -728,6 +736,10 @@ def rpc_dispatch(method: str, params: dict) -> Any:
 
     if method == "stream.clear":
         stream_svc.clear()
+        # Also drop the SSE backlog so a freshly-attached client (or a TUI
+        # restart that reuses an existing sidecar) does not replay stale
+        # batches from the previous session.
+        sse_clients.clear_backlog()
         return {"ok": True}
 
     # -- Capture --
@@ -848,7 +860,95 @@ def _install_parent_death_signal() -> None:
         pass
 
 
+_parent_watchdog_pid: Optional[int] = None
+_parent_watchdog_lock = threading.Lock()
+_server_ref: Optional[ThreadingHTTPServer] = None
+
+
+def _request_shutdown() -> None:
+    if _server_ref is not None:
+        threading.Thread(target=_server_ref.shutdown, daemon=True).start()
+
+
+def _start_parent_watchdog(on_parent_dead, parent_pid: Optional[int] = None) -> None:
+    global _parent_watchdog_pid
+    if parent_pid is None:
+        raw_pid = os.environ.get("PSTUI_PARENT_PID", "")
+        try:
+            parent_pid = int(raw_pid)
+        except ValueError:
+            return
+    if parent_pid <= 0 or parent_pid == os.getpid():
+        return
+
+    with _parent_watchdog_lock:
+        if _parent_watchdog_pid == parent_pid:
+            return
+        _parent_watchdog_pid = parent_pid
+
+    watched_pid = parent_pid
+
+    def _is_current_watch() -> bool:
+        with _parent_watchdog_lock:
+            return _parent_watchdog_pid == watched_pid
+
+    def _notify() -> None:
+        if not _is_current_watch():
+            return
+        print(
+            f"[sidecar] parent process {watched_pid} is gone, shutting down",
+            file=sys.stderr,
+            flush=True,
+        )
+        on_parent_dead()
+
+    if sys.platform == "win32":
+        def _watch_windows() -> None:
+            try:
+                import ctypes
+                kernel32 = ctypes.windll.kernel32
+                SYNCHRONIZE = 0x00100000
+                INFINITE = 0xFFFFFFFF
+                handle = kernel32.OpenProcess(SYNCHRONIZE, False, watched_pid)
+                if not handle:
+                    _notify()
+                    return
+                try:
+                    kernel32.WaitForSingleObject(handle, INFINITE)
+                finally:
+                    kernel32.CloseHandle(handle)
+                _notify()
+            except Exception as e:
+                print(
+                    f"[sidecar] parent watchdog unavailable: {type(e).__name__}: {e}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+        threading.Thread(target=_watch_windows, daemon=True, name="parent-watchdog").start()
+        return
+
+    def _watch_posix() -> None:
+        while True:
+            try:
+                os.kill(watched_pid, 0)
+            except ProcessLookupError:
+                _notify()
+                return
+            except PermissionError:
+                pass
+            except Exception as e:
+                print(
+                    f"[sidecar] parent watchdog unavailable: {type(e).__name__}: {e}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return
+            time.sleep(1.0)
+    threading.Thread(target=_watch_posix, daemon=True, name="parent-watchdog").start()
+
+
 def main():
+    global _server_ref
     parser = argparse.ArgumentParser(description="ProbeStream TUI sidecar")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=17900)
@@ -859,6 +959,7 @@ def main():
     print("[sidecar] OpenOCD not connected at startup — use /openocd start or /openocd connect", file=sys.stderr)
 
     server = ThreadingHTTPServer((args.host, args.port), SidecarHandler)
+    _server_ref = server
     server.daemon_threads = True
     print(f"[sidecar] listening on http://{args.host}:{args.port}", file=sys.stderr)
 
@@ -872,6 +973,8 @@ def main():
     # SIGHUP does not exist on Windows.
     if hasattr(signal, "SIGHUP"):
         signal.signal(signal.SIGHUP, _shutdown)
+
+    _start_parent_watchdog(_request_shutdown)
 
     try:
         server.serve_forever()

@@ -35,6 +35,7 @@ interface AppFrameProps {
   onQuit: () => void;
   initialSidecarLog?: readonly string[];
   subscribeSidecarLog?: (listener: (line: string) => void) => () => void;
+  clearSidecarLog?: () => void;
 }
 
 function detailOf(value: unknown): string | undefined {
@@ -71,7 +72,7 @@ function initialLogEntries(lines: readonly string[] | undefined): AppLogEntry[] 
   }));
 }
 
-export function AppFrame({ client, onQuit, initialSidecarLog, subscribeSidecarLog }: AppFrameProps) {
+export function AppFrame({ client, onQuit, initialSidecarLog, subscribeSidecarLog, clearSidecarLog }: AppFrameProps) {
   const [page, setPage] = useState<PageId>("splash");
   const [flash, setFlash] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -102,6 +103,7 @@ export function AppFrame({ client, onQuit, initialSidecarLog, subscribeSidecarLo
   const [displayMode, setDisplayMode] = useState<DisplayMode>("ascii");
   const [selectedChannel, setSelectedChannel] = useState(0);
   const [channelLayout, setChannelLayout] = useState<StreamChannelLayout>("single");
+  const [streamClearSignal, setStreamClearSignal] = useState(0);
 
   // Terminal mode state
   const [terminalMode, setTerminalMode] = useState(false);
@@ -124,6 +126,12 @@ export function AppFrame({ client, onQuit, initialSidecarLog, subscribeSidecarLo
     setLogEntries((entries) => [...entries, entry].slice(-500));
   }, []);
 
+  const clearLog = useCallback(() => {
+    clearSidecarLog?.();
+    setLogEntries([]);
+    nextLogIdRef.current = 1;
+  }, [clearSidecarLog]);
+
   const report = useCallback((message: string, kind: LogKind = "info", detail?: unknown) => {
     setFlash(message);
     appendLog(kind, message, detail);
@@ -134,6 +142,13 @@ export function AppFrame({ client, onQuit, initialSidecarLog, subscribeSidecarLo
     setError(message);
     appendLog("error", message, detail);
   }, [appendLog]);
+
+  const clearStream = useCallback(() => {
+    setStreamClearSignal((signal) => signal + 1);
+    client.streamClear()
+      .then((r) => report("stream cleared", "reply", r))
+      .catch((e) => reportError(`clear stream failed: ${errorMessage(e)}`));
+  }, [client, report, reportError]);
 
   useEffect(() => {
     if (!subscribeSidecarLog) return;
@@ -242,7 +257,7 @@ export function AppFrame({ client, onQuit, initialSidecarLog, subscribeSidecarLo
     "quickstart",
     "discover", "scan", "attach", "openocd", "stream-start",
     "send", "send-hex",
-    "channel", "recent", "mode", "clear",
+    "channel", "recent", "mode", "clear", "clearstream", "clearlog",
     "capture", "copy", "set", "quit", "exit",
   ], []);
 
@@ -580,10 +595,20 @@ export function AppFrame({ client, onQuit, initialSidecarLog, subscribeSidecarLo
         break;
       }
       case "clear":
-        client.streamClear()
-          .then((r) => report("cleared", "reply", r))
-          .catch((e) => reportError(`clear failed: ${errorMessage(e)}`));
+      case "clearstream":
+      case "clear-stream":
+      case "clearstreams":
+      case "clear-streams":
+        clearStream();
         break;
+      case "clearlog":
+      case "clear-log":
+      case "clearlogs":
+      case "clear-logs": {
+        clearLog();
+        setFlash("log cleared");
+        break;
+      }
       case "capture": {
         if (rest[0] === "on") {
           client.captureStart(
@@ -626,7 +651,7 @@ export function AppFrame({ client, onQuit, initialSidecarLog, subscribeSidecarLo
       default:
         report(`unknown command: /${head}`, "error");
     }
-  }, [appendLog, client, downChannel, logEntries, onQuit, openocdOptions, page, quickStartStreaming, refreshHealth, refreshProbes, rememberCommand, report, reportError, scanProbeStream, selectedChannel, sendDownText, settings, updateSettings]);
+  }, [appendLog, clearLog, clearStream, client, downChannel, logEntries, onQuit, openocdOptions, page, quickStartStreaming, refreshHealth, refreshProbes, rememberCommand, report, reportError, scanProbeStream, selectedChannel, sendDownText, settings, updateSettings]);
 
   const onSubmit = useCallback((line: string) => {
     const trimmed = line.trim();
@@ -784,11 +809,12 @@ export function AppFrame({ client, onQuit, initialSidecarLog, subscribeSidecarLo
             downChannel={downChannel}
             recentCommands={recentCommands}
             recentCommandsCollapsed={recentCommandsCollapsed}
+            clearSignal={streamClearSignal}
           />
         ) : page === "settings" ? (
           <SettingsPage active={pageInputActive} settings={settings} onChange={updateSettings} />
         ) : page === "log" ? (
-          <LogPage active={pageInputActive} entries={logEntries} onClear={() => setLogEntries([])} />
+          <LogPage active={pageInputActive} entries={logEntries} onClear={clearLog} />
         ) : null}
       </box>
 
