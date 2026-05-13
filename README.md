@@ -6,6 +6,16 @@ ProbeStream is a clean-room, RTT-style bidirectional transport between a microco
 
 If you've used SEGGER RTT, this is the same idea : a free, header-only-ish C library on the target plus a small C++/Python reader on the host. It works with any debug probe that can do non-intrusive memory reads (ST-Link, J-Link, CMSIS-DAP, ULINK, …) via OpenOCD or pyOCD.
 
+## Quick References
+
+- [TUI Quick Start](docs/TUI-QuickStart.md) — first-run setup, settings, OpenOCD, probe selection, scan/attach, and streaming
+- [TUI README](tools/tui/README.md) — install/run instructions, commands, settings, architecture, tests, and limitations
+- [Target C API](docs/API.md) — firmware-side `PS_Init`, write/printf, channel, and down-channel APIs
+- [Wire Protocol](docs/wire-protocol.md) — control block and ring-buffer layout used by host tools
+- [TUI source](tools/tui/) — OpenTUI frontend, Python sidecar, scripts, and tests
+
+
+
 ## Why ProbeStream
 - **No JLink required** to get RTT style logging.
 - **No extra pins or peripherals.** Uses the SWD link you already use for flashing.
@@ -13,7 +23,6 @@ If you've used SEGGER RTT, this is the same idea : a free, header-only-ish C lib
 - **Non-halting.** The host reads memory while the CPU runs at full speed.
 - **Bidirectional.** Up-channels (target → host) for logs/telemetry; down-channels (host → target) for runtime commands.
 - **Easy to compile-out.** Set `PS_ENABLED 0` and every call disappears : zero footprint in release builds.
-
 
 
 ## Measured performance
@@ -111,7 +120,9 @@ Full API in [docs/API.md](docs/API.md).
 
 ### On the host
 
-Easiest path right now: launch the Python terminal.
+For the terminal UI, start with the [TUI quick-start guide](docs/TUI-QuickStart.md). It covers installing the TUI dependencies, setting OpenOCD paths/configs, selecting a probe, scanning for the ProbeStream control block, and starting the live stream.
+
+Legacy Python terminal path:
 
 ```bash
 ./tools/run_terminal.sh --launch-openocd

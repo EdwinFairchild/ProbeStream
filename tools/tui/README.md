@@ -2,6 +2,15 @@
 
 Terminal UI for real-time debug streaming over OpenOCD using the ProbeStream protocol.
 
+## Quick References
+
+- [TUI Quick Start](../../docs/TUI-QuickStart.md) — first-run setup, settings, OpenOCD, probe selection, scan/attach, and streaming
+- [ProbeStream README](../../README.md) — project overview, target integration, performance notes, and repository layout
+- [Target C API](../../docs/API.md) — firmware-side `PS_Init`, write/printf, channel, and down-channel APIs
+- [Wire Protocol](../../docs/wire-protocol.md) — control block and ring-buffer layout used by host tools
+- [TUI Commands](#commands) — slash command reference for this interface
+- [TUI Settings](#settings) — persisted settings used by the sidecar and OpenOCD launcher
+
 ## Prerequisites
 
 - **Bun** ≥ 1.3 — runtime and package manager (replaces Node/npm)
@@ -66,15 +75,17 @@ Produces a standalone binary + sidecar in `../../probestream-tui-dist/`.
 
 ## Quick Start
 
+For a complete first-run walkthrough, including settings, OpenOCD setup, probe selection, attach/scan, and stream startup, see [../../docs/TUI-QuickStart.md](../../docs/TUI-QuickStart.md).
+
 1. Press `/` to open the command prompt
 2. `/discover` — list attached debug probes
 3. `/probes` — select a probe serial when more than one is attached
 4. `/settings` — configure OpenOCD path, interface, target, RAM range
 5. `/openocd start` — spawn OpenOCD for the selected probe
 6. `/scan` — scan target RAM for the ProbeStream control block
-7. `/start` — begin streaming
+7. `/stream-start` — begin streaming without re-running OpenOCD/scan
 8. `/stream` — view up-channel data
-9. `/terminal enter` — type commands to the down-channel
+9. `/terminal 0` — type commands to down-channel 0
 
 ## Key Bindings
 
@@ -111,7 +122,7 @@ Produces a standalone binary + sidecar in `../../probestream-tui-dist/`.
 `/start`, `/stop`, `/channel <n>`, `/mode raw|hex|ascii|line`, `/clear`
 
 ### Terminal
-`/terminal enter [channel]`, `/terminal exit`, `/send <text>`, `/send-hex <hex>`
+`/terminal [channel]`, `/terminal exit`, `/send <text>`, `/send-hex <hex>`
 
 ### Capture
 `/capture on|off|path <file>|format raw|text|jsonl`
@@ -137,7 +148,7 @@ Key settings (configurable via `/settings` page or `/set`):
 | `pollMs` | `25` | Stream polling interval |
 | `captureFormat` | `raw` | Capture file format |
 
-Settings persist to `~/.config/probestream-tui/settings.json`.
+Settings persist to `~/.config/probestream-tui/settings.json` on Linux/macOS, or `%USERPROFILE%\.config\probestream-tui\settings.json` on Windows.
 
 ## Architecture
 

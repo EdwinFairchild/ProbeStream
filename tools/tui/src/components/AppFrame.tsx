@@ -8,6 +8,8 @@ import type { DisplayMode } from "../decoders/index.ts";
 import { PromptBar } from "./PromptBar.tsx";
 import { PageSwitcher, type SwitcherPage } from "./PageSwitcher.tsx";
 import { HelpModal } from "./HelpModal.tsx";
+import { PageHelpModal } from "./PageHelpModal.tsx";
+import { QuickStartModal } from "./QuickStartModal.tsx";
 import { ConfirmModal } from "./ConfirmModal.tsx";
 import { SplashPage } from "../pages/SplashPage.tsx";
 import { ProbesPage } from "../pages/ProbesPage.tsx";
@@ -80,6 +82,11 @@ export function AppFrame({ client, onQuit, initialSidecarLog, subscribeSidecarLo
   const [settings, setSettings] = useState<SettingsMap>(() => withDefaults(loadLocalSettings()));
   const [logEntries, setLogEntries] = useState<AppLogEntry[]>(() => initialLogEntries(initialSidecarLog));
   const [helpOpen, setHelpOpen] = useState(false);
+  const [pageHelpOpen, setPageHelpOpen] = useState(false);
+  const [quickStartOpen, setQuickStartOpen] = useState<boolean>(() => {
+    const local = loadLocalSettings();
+    return local["quickStartSeen"] !== "true";
+  });
   const [promptInputActive, setPromptInputActive] = useState(false);
   const [promptActivationToken, setPromptActivationToken] = useState(0);
   const [promptActivationInsertsSlash, setPromptActivationInsertsSlash] = useState(false);
@@ -142,19 +149,19 @@ export function AppFrame({ client, onQuit, initialSidecarLog, subscribeSidecarLo
     setProbeScanBusy(true);
     const request = (async () => {
       try {
-      const result = await client.discoverProbes();
-      setProbeDiscovery(result);
-      setDebugProbes(result.probes);
-      appendLog(result.probes.length > 0 ? "reply" : "info", `debug probes: ${result.probes.length}`, result.error ?? result.tools);
-      return result;
+        const result = await client.discoverProbes();
+        setProbeDiscovery(result);
+        setDebugProbes(result.probes);
+        appendLog(result.probes.length > 0 ? "reply" : "info", `debug probes: ${result.probes.length}`, result.error ?? result.tools);
+        return result;
       } catch (err) {
-      const message = `probe discovery failed: ${errorMessage(err)}`;
-      setProbeDiscovery({ ok: false, probes: [], tools: [], error: message });
-      setDebugProbes([]);
-      appendLog("error", message);
-      return null;
+        const message = `probe discovery failed: ${errorMessage(err)}`;
+        setProbeDiscovery({ ok: false, probes: [], tools: [], error: message });
+        setDebugProbes([]);
+        appendLog("error", message);
+        return null;
       } finally {
-      setProbeScanBusy(false);
+        setProbeScanBusy(false);
         probeRefreshRef.current = null;
       }
     })();
@@ -177,7 +184,7 @@ export function AppFrame({ client, onQuit, initialSidecarLog, subscribeSidecarLo
   }, [client]);
 
   useEffect(() => {
-    refreshProbes().catch(() => {});
+    refreshProbes().catch(() => { });
   }, [refreshProbes]);
 
   // Auto-clear flash
@@ -232,6 +239,7 @@ export function AppFrame({ client, onQuit, initialSidecarLog, subscribeSidecarLo
   const SLASH_COMMANDS = useMemo(() => [
     "splash", "probes", "stream", "terminal", "settings", "log", "logs", "help",
     "start", "stop", "pause", "resume",
+    "quickstart",
     "discover", "scan", "attach", "openocd", "stream-start",
     "send", "send-hex",
     "channel", "recent", "mode", "clear",
@@ -378,9 +386,12 @@ export function AppFrame({ client, onQuit, initialSidecarLog, subscribeSidecarLo
       case "log":
       case "logs": setPage("log"); appendLog("reply", "page: log"); break;
       case "help":
-      case "?":
         setHelpOpen(true);
         appendLog("reply", "help opened");
+        break;
+      case "?":
+        setPageHelpOpen(true);
+        appendLog("reply", `${page} help opened`);
         break;
       case "quit":
       case "exit":
@@ -413,6 +424,10 @@ export function AppFrame({ client, onQuit, initialSidecarLog, subscribeSidecarLo
         });
         break;
       }
+      case "quickstart":
+        setQuickStartOpen(true);
+        appendLog("reply", "quick start guide opened");
+        break;
       case "start":
         quickStartStreaming();
         break;
@@ -611,7 +626,7 @@ export function AppFrame({ client, onQuit, initialSidecarLog, subscribeSidecarLo
       default:
         report(`unknown command: /${head}`, "error");
     }
-  }, [appendLog, client, downChannel, logEntries, onQuit, openocdOptions, quickStartStreaming, refreshHealth, refreshProbes, rememberCommand, report, reportError, scanProbeStream, selectedChannel, sendDownText, settings, updateSettings]);
+  }, [appendLog, client, downChannel, logEntries, onQuit, openocdOptions, page, quickStartStreaming, refreshHealth, refreshProbes, rememberCommand, report, reportError, scanProbeStream, selectedChannel, sendDownText, settings, updateSettings]);
 
   const onSubmit = useCallback((line: string) => {
     const trimmed = line.trim();
@@ -645,17 +660,17 @@ export function AppFrame({ client, onQuit, initialSidecarLog, subscribeSidecarLo
     if (key.eventType === "release") return;
 
     if (
-      !promptInputActive && !helpOpen && !switcherOpen && !completerActive &&
+      !promptInputActive && !helpOpen && !pageHelpOpen && !switcherOpen && !completerActive &&
       !key.ctrl && !key.meta && !key.option &&
       (key.sequence === "?" || key.name === "?")
     ) {
-      setHelpOpen(true);
+      setPageHelpOpen(true);
       key.preventDefault(); key.stopPropagation();
       return;
     }
 
     if (
-      !promptInputActive && !helpOpen && !switcherOpen && !completerActive &&
+      !promptInputActive && !helpOpen && !pageHelpOpen && !switcherOpen && !completerActive &&
       !key.ctrl && !key.meta && !key.option && isSlashKey(key)
     ) {
       setPromptActivationInsertsSlash(promptEmpty);
@@ -667,6 +682,7 @@ export function AppFrame({ client, onQuit, initialSidecarLog, subscribeSidecarLo
 
     if (
       key.ctrl && !key.shift && !key.meta && !key.option &&
+      !helpOpen && !pageHelpOpen && !quickStartOpen &&
       (key.name === "right" || key.name === "left")
     ) {
       const dir = key.name === "right" ? 1 : -1;
@@ -690,7 +706,7 @@ export function AppFrame({ client, onQuit, initialSidecarLog, subscribeSidecarLo
   }, { release: true });
 
   const promptChromeOpen = promptInputActive || completerActive;
-  const pageInputActive = !helpOpen && !promptChromeOpen && !switcherOpen && !confirmAction;
+  const pageInputActive = !helpOpen && !pageHelpOpen && !quickStartOpen && !promptChromeOpen && !switcherOpen && !confirmAction;
 
   return (
     <box style={{ flexDirection: "column", backgroundColor: theme.bg, flexGrow: 1 }}>
@@ -734,7 +750,7 @@ export function AppFrame({ client, onQuit, initialSidecarLog, subscribeSidecarLo
             probes={debugProbes}
             probeDiscovery={probeDiscovery}
             probeScanBusy={probeScanBusy}
-            onRefreshProbes={() => { refreshProbes().catch(() => {}); }}
+            onRefreshProbes={() => { refreshProbes().catch(() => { }); }}
             onQuickStart={quickStartStreaming}
           />
         ) : page === "probes" ? (
@@ -743,7 +759,7 @@ export function AppFrame({ client, onQuit, initialSidecarLog, subscribeSidecarLo
             active={pageInputActive}
             probes={debugProbes}
             probeDiscovery={probeDiscovery}
-            onRefreshProbes={() => { refreshProbes().catch(() => {}); }}
+            onRefreshProbes={() => { refreshProbes().catch(() => { }); }}
             onSelectProbe={(probe) => {
               if (!probe.serial) {
                 report("selected probe has no serial", "error", probe);
@@ -776,7 +792,18 @@ export function AppFrame({ client, onQuit, initialSidecarLog, subscribeSidecarLo
         ) : null}
       </box>
 
+      <QuickStartModal
+        open={quickStartOpen}
+        onClose={(doNotShow) => {
+          setQuickStartOpen(false);
+          if (doNotShow) {
+            const local = loadLocalSettings();
+            saveLocalSettings({ ...local, quickStartSeen: "true" });
+          }
+        }}
+      />
       <HelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />
+      <PageHelpModal open={pageHelpOpen} page={page} onClose={() => setPageHelpOpen(false)} />
       <PageSwitcher open={switcherOpen} pages={SWITCHER_PAGES} selected={switcherIdx} />
 
       {confirmAction ? (
@@ -791,7 +818,7 @@ export function AppFrame({ client, onQuit, initialSidecarLog, subscribeSidecarLo
 
       {/* Footer prompt */}
       <PromptBar
-        enabled={!helpOpen && !switcherOpen}
+        enabled={!helpOpen && !pageHelpOpen && !quickStartOpen && !switcherOpen}
         inputActive={promptInputActive}
         activationToken={promptActivationToken}
         activationInsertsSlash={promptActivationInsertsSlash}

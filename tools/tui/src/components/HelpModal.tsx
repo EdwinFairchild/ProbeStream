@@ -1,5 +1,5 @@
 import React from "react";
-import { useKeyboard } from "@opentui/react";
+import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import { theme } from "../theme.ts";
 
 interface Props {
@@ -52,7 +52,19 @@ const HELP_LINES = [
   "  /quit          Exit",
 ];
 
+const RESERVED_TOP_ROWS = 1;
+const RESERVED_PROMPT_ROWS = 5;
+const MODAL_VERTICAL_GUTTER = 2;
+const PREFERRED_MODAL_WIDTH = 62;
+
 export function HelpModal({ open, onClose }: Props) {
+  const { width, height } = useTerminalDimensions();
+  const availableWidth = Math.max(20, width - 4);
+  const modalWidth = Math.max(20, Math.min(PREFERRED_MODAL_WIDTH, availableWidth));
+  const availableHeight = Math.max(6, height - RESERVED_TOP_ROWS - RESERVED_PROMPT_ROWS - MODAL_VERTICAL_GUTTER);
+  const bodyHeight = Math.max(1, Math.min(HELP_LINES.length, availableHeight - 4));
+  const hasScroll = HELP_LINES.length > bodyHeight;
+
   useKeyboard((key) => {
     if (!open) return;
     if (key.name === "escape" || key.name === "return" || key.sequence === "q") {
@@ -66,8 +78,8 @@ export function HelpModal({ open, onClose }: Props) {
 
   return (
     <>
-      <box style={{ position: "absolute", top: 1, left: 0, right: 0, bottom: 0, backgroundColor: "#000000", opacity: 0.72 }} />
-      <box style={{ position: "absolute", top: 1, left: 0, right: 0, bottom: 0, justifyContent: "center", alignItems: "center", flexDirection: "column" }}>
+      <box style={{ position: "absolute", top: RESERVED_TOP_ROWS, left: 0, right: 0, bottom: RESERVED_PROMPT_ROWS, backgroundColor: "#000000", opacity: 0.72 }} />
+      <box style={{ position: "absolute", top: RESERVED_TOP_ROWS + 1, left: 0, right: 0, bottom: RESERVED_PROMPT_ROWS + 1, justifyContent: "center", alignItems: "center", flexDirection: "column" }}>
         <box
           style={{
             flexDirection: "column",
@@ -76,17 +88,33 @@ export function HelpModal({ open, onClose }: Props) {
             borderColor: theme.accent,
             paddingLeft: 2, paddingRight: 2,
             paddingTop: 1, paddingBottom: 1,
-            maxWidth: 60,
+            width: modalWidth,
+            maxHeight: availableHeight,
           }}
         >
-          {HELP_LINES.map((line, i) => (
-            <text
-              key={i}
-              style={{ fg: line.startsWith("  /") ? theme.accent : i === 0 ? theme.primary : theme.text }}
-              content={line || " "}
-            />
-          ))}
-          <text style={{ fg: theme.muted, marginTop: 1 }} content="Esc/Enter/q to close" />
+          <scrollbox
+            focused
+            scrollY
+            style={{
+              height: bodyHeight,
+              width: modalWidth - 4,
+              scrollbarOptions: {
+                trackOptions: {
+                  foregroundColor: theme.accentDim,
+                  backgroundColor: theme.surfaceVariant,
+                },
+              },
+            }}
+          >
+            {HELP_LINES.map((line, i) => (
+              <text
+                key={i}
+                style={{ fg: line.startsWith("  /") ? theme.accent : i === 0 ? theme.primary : theme.text }}
+                content={line || " "}
+              />
+            ))}
+          </scrollbox>
+          <text style={{ fg: theme.muted, marginTop: 1 }} content={hasScroll ? "↑/↓ scroll  ·  Esc/Enter/q close" : "Esc/Enter/q to close"} />
         </box>
       </box>
     </>

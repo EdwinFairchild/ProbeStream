@@ -1,5 +1,6 @@
 import React from "react";
 import { TextAttributes } from "@opentui/core";
+import { useTerminalDimensions } from "@opentui/react";
 import { theme } from "../theme.ts";
 
 export interface SwitcherPage {
@@ -14,7 +15,16 @@ interface Props {
   selected: number;
 }
 
+const RESERVED_TOP_ROWS = 1;
+const RESERVED_PROMPT_ROWS = 5;
+const MODAL_VERTICAL_GUTTER = 2;
+
 export function PageSwitcher({ open, pages, selected }: Props) {
+  const { width, height } = useTerminalDimensions();
+  const availableWidth = Math.max(20, width - 4);
+  const modalWidth = Math.max(20, Math.min(64, availableWidth));
+  const availableHeight = Math.max(5, height - RESERVED_TOP_ROWS - RESERVED_PROMPT_ROWS - MODAL_VERTICAL_GUTTER);
+
   if (!open) return null;
   const active = pages[selected];
 
@@ -26,7 +36,7 @@ export function PageSwitcher({ open, pages, selected }: Props) {
       <box
         style={{
           position: "absolute",
-          top: 1, left: 0, right: 0, bottom: 0,
+          top: RESERVED_TOP_ROWS, left: 0, right: 0, bottom: RESERVED_PROMPT_ROWS,
           backgroundColor: "#000000",
           opacity: 0.55,
         }}
@@ -36,7 +46,7 @@ export function PageSwitcher({ open, pages, selected }: Props) {
       <box
         style={{
           position: "absolute",
-          top: 1, left: 0, right: 0, bottom: 0,
+          top: RESERVED_TOP_ROWS + 1, left: 0, right: 0, bottom: RESERVED_PROMPT_ROWS + 1,
           justifyContent: "center",
           alignItems: "center",
           flexDirection: "column",
@@ -45,7 +55,8 @@ export function PageSwitcher({ open, pages, selected }: Props) {
         <box
           style={{
             flexDirection: "column",
-            minWidth: 52,
+            width: modalWidth,
+            maxHeight: availableHeight,
           }}
         >
           {/* Glass body */}
