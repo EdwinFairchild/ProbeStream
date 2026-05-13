@@ -19,31 +19,84 @@ export interface SupervisedSidecar {
 const IS_WINDOWS = process.platform === "win32";
 const SIDECAR_SCRIPT = IS_WINDOWS ? "sidecar.cmd" : "sidecar.sh";
 
-function resolveDefaultLauncher(): string {
-  const override = process.env.PSTUI_SIDECAR;
-  if (override && override.length > 0) return override;
+interface ResolvedLauncher {
+  cmd: string;
+  args: string[];
+  /** Original launcher path/string (for logging/debug). */
+  display: string;
+}
 
-  const execDir = dirname(process.execPath);
-  const execName = basename(process.execPath);
-  const adjacentScript = SIDECAR_SCRIPT;
-  const adjacent = resolve(execDir, adjacentScript);
-  if (
-    (execName === "probestream-tui" || execName === "probestream-tui-bin" ||
-     execName === "probestream-tui.exe" || execName === "probestream-tui-bin.exe") &&
-    existsSync(adjacent)
-  ) {
-    return adjacent;
-  }
-
+function findRepoSidecarPy(): string | null {
   try {
     const here = dirname(fileURLToPath(import.meta.url));
-    return resolve(here, `../../scripts/${SIDECAR_SCRIPT}`);
+    const py = resolve(here, "../../sidecar/pstui_sidecar.py");
+    return existsSync(py) ? py : null;
   } catch {
-    return adjacent;
+    return null;
   }
 }
 
-const DEFAULT_LAUNCHER = resolveDefaultLauncher();
+function findAdjacentSidecarPy(): string | null {
+  const execDir = dirname(process.execPath);
+  // Common layouts: <execDir>/sidecar/pstui_sidecar.py or <execDir>/pstui_sidecar.py
+  const candidates = [
+    resolve(execDir, "sidecar", "pstui_sidecar.py"),
+    resolve(execDir, "pstui_sidecar.py"),
+  ];
+  for (const p of candidates) if (existsSync(p)) return p;
+  return null;
+}
+
+function resolveLauncher(override?: string): ResolvedLauncher {
+  const envOverride = override ?? process.env.PSTUI_SIDECAR;
+
+  // Honor explicit override exactly (assume user knows what they want).
+  if (envOverride && envOverride.length > 0) {
+    if (IS_WINDOWS && envOverride.toLowerCase().endsWith(".cmd")) {
+      return { cmd: "cmd.exe", args: ["/c", envOverride], display: envOverride };
+    }
+    return { cmd: envOverride, args: [], display: envOverride };
+  }
+
+  // On Windows, prefer launching python directly (no cmd.exe → no console
+  // window pop-up regardless of windowsHide / detached interactions).
+  if (IS_WINDOWS) {
+    const py = findRepoSidecarPy() ?? findAdjacentSidecarPy();
+    if (py) {
+      const host = process.env.PSTUI_SIDECAR_HOST ?? "127.0.0.1";
+      const port = process.env.PSTUI_SIDECAR_PORT ?? "17900";
+      return {
+        cmd: "python",
+        args: [py, "--host", host, "--port", port],
+        display: `python ${py}`,
+      };
+    }
+    // Fall through to .cmd shim if we couldn't locate the .py.
+  }
+
+  // Default: use the platform script shim.
+  const execDir = dirname(process.execPath);
+  const execName = basename(process.execPath);
+  const adjacent = resolve(execDir, SIDECAR_SCRIPT);
+  let shim = adjacent;
+  if (
+    !((execName === "probestream-tui" || execName === "probestream-tui-bin" ||
+       execName === "probestream-tui.exe" || execName === "probestream-tui-bin.exe") &&
+      existsSync(adjacent))
+  ) {
+    try {
+      const here = dirname(fileURLToPath(import.meta.url));
+      shim = resolve(here, `../../scripts/${SIDECAR_SCRIPT}`);
+    } catch {
+      shim = adjacent;
+    }
+  }
+
+  if (IS_WINDOWS && shim.toLowerCase().endsWith(".cmd")) {
+    return { cmd: "cmd.exe", args: ["/c", shim], display: shim };
+  }
+  return { cmd: shim, args: [], display: shim };
+}
 
 async function ping(baseUrl: string, timeoutMs = 800): Promise<boolean> {
   const ctl = new AbortController();
@@ -71,24 +124,26 @@ export async function ensureSidecar(opts: SupervisorOptions): Promise<Supervised
     return { spawned: false, stop: () => {} };
   }
 
-  const launcher = opts.launcher ?? DEFAULT_LAUNCHER;
-  const args = opts.extraArgs ?? [];
+  const resolved = resolveLauncher(opts.launcher);
+  const extraArgs = opts.extraArgs ?? [];
+  const spawnArgs = [...resolved.args, ...extraArgs];
   const spawnOpts: import("node:child_process").SpawnOptions = {
     stdio: ["ignore", "pipe", "pipe"],
-    // Put sidecar (and any grandchildren like OpenOCD) in their own process
-    // group so we can signal the entire group with `kill(-pid, …)` on quit.
-    // On Windows detached=true creates a new process group which lets
-    // taskkill /T terminate the whole tree.
-    detached: true,
+    // Suppress any console window on Windows. Combined with NOT setting
+    // detached:true on Windows, this keeps the python sidecar fully hidden.
+    windowsHide: true,
   };
-  // On Windows, .cmd files must be launched via cmd.exe
-  const spawnCmd = IS_WINDOWS && launcher.endsWith(".cmd")
-    ? "cmd.exe"
-    : launcher;
-  const spawnArgs = IS_WINDOWS && launcher.endsWith(".cmd")
-    ? ["/c", launcher, ...args]
-    : args;
-  const child: ChildProcess = spawn(spawnCmd, spawnArgs, spawnOpts);
+  if (IS_WINDOWS) {
+    // CREATE_NO_WINDOW (0x08000000) prevents a console from being created
+    // for the child even when the parent has one (e.g. PowerShell). We use
+    // taskkill /T to terminate the tree on stop, so we don't need a new
+    // process group here.
+    (spawnOpts as { creationflags?: number }).creationflags = 0x08000000;
+  } else {
+    // POSIX: own process group so we can group-signal on quit.
+    spawnOpts.detached = true;
+  }
+  const child: ChildProcess = spawn(resolved.cmd, spawnArgs, spawnOpts);
 
   const log = opts.onLog ?? (() => {});
   const pipe = (buf: Buffer) =>

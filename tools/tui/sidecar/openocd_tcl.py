@@ -5,6 +5,7 @@ bulk read_memory (faster but not universally supported on running targets).
 """
 
 import os
+import shutil
 import socket
 import struct
 import subprocess
@@ -291,12 +292,56 @@ class OpenOcdProcess:
             args.extend(["-f", _normalize(target_config, "target")])
         args.extend(["-c", f"tcl_port {tcl_port}"])
 
-        self.proc = subprocess.Popen(
-            args,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,  # own process group → group-kill on stop
-        )
+        # Resolve the executable. On Windows a bare program name like
+        # "openocd" can mis-resolve (e.g. to a directory in PATH) and
+        # subprocess.Popen surfaces that as "[WinError 5] Access is denied",
+        # which is confusing. Resolve via shutil.which() (auto-tries .exe,
+        # .bat, .cmd via PATHEXT on Windows) and fail with a clear message.
+        if os.path.isdir(openocd_path):
+            # User pointed at the bin/ folder instead of the exe. Try common
+            # names inside it before giving up.
+            for candidate in ("openocd.exe", "openocd"):
+                full = os.path.join(openocd_path, candidate)
+                if os.path.isfile(full):
+                    args[0] = full
+                    break
+            else:
+                raise FileNotFoundError(
+                    f"openocdPath '{openocd_path}' is a directory and contains no "
+                    f"openocd executable. Set openocdPath to the full path of the "
+                    f"openocd binary (e.g. '{os.path.join(openocd_path, 'openocd.exe')}')."
+                )
+        elif not (os.path.isabs(openocd_path) or os.sep in openocd_path or
+                (os.altsep and os.altsep in openocd_path)):
+            resolved = shutil.which(openocd_path)
+            if resolved is None and sys.platform == "win32" and not openocd_path.lower().endswith(".exe"):
+                resolved = shutil.which(openocd_path + ".exe")
+            if resolved is None:
+                raise FileNotFoundError(
+                    f"OpenOCD executable '{openocd_path}' not found on PATH. "
+                    f"Install OpenOCD or set the openocdPath setting to its full path."
+                )
+            args[0] = resolved
+
+        # start_new_session is POSIX-only. On Windows use creationflags to
+        # put the child in its own process group so we can group-signal it.
+        popen_kwargs: dict = {
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.STDOUT,
+        }
+        if sys.platform == "win32":
+            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            popen_kwargs["start_new_session"] = True
+
+        try:
+            self.proc = subprocess.Popen(args, **popen_kwargs)
+        except PermissionError as e:
+            raise PermissionError(
+                f"Cannot execute OpenOCD at '{args[0]}': {e}. "
+                f"Check that the path points to the openocd executable (not a directory) "
+                f"and that you have permission to run it."
+            ) from e
 
         # CRITICAL: drain the stdout/stderr pipe continuously in a daemon
         # thread. Linux pipe buffers are ~64 KB. OpenOCD logs every Tcl
@@ -338,6 +383,28 @@ class OpenOcdProcess:
             return
         proc = self.proc
         self.proc = None
+
+        if sys.platform == "win32":
+            # No POSIX signals / process groups on Windows. Use taskkill /T
+            # to terminate the whole process tree (OpenOCD may have spawned
+            # helper processes).
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5,
+                )
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                pass
+            return
 
         def _signal_group(sig: int) -> None:
             try:
