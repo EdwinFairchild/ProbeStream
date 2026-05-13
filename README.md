@@ -8,8 +8,8 @@ If you've used SEGGER RTT, this is the same idea : a free, header-only-ish C lib
 
 ## Quick References
 
-- [TUI Quick Start](docs/TUI-QuickStart.md) — first-run setup, settings, OpenOCD, probe selection, scan/attach, and streaming
-- [TUI README](tools/tui/README.md) — install/run instructions, commands, settings, architecture, tests, and limitations
+- [TUI Quick Start](docs/TUI-QuickStart.md) — download-first setup, settings, OpenOCD, probe selection, scan/attach, and streaming
+- [TUI README](tools/tui/README.md) — release downloads, source build instructions, commands, settings, architecture, tests, and limitations
 - [Target C API](docs/API.md) — firmware-side `PS_Init`, write/printf, channel, and down-channel APIs
 - [Wire Protocol](docs/wire-protocol.md) — control block and ring-buffer layout used by host tools
 - [TUI source](tools/tui/) — OpenTUI frontend, Python sidecar, scripts, and tests
@@ -120,7 +120,9 @@ Full API in [docs/API.md](docs/API.md).
 
 ### On the host
 
-For the terminal UI, start with the [TUI quick-start guide](docs/TUI-QuickStart.md). It covers installing the TUI dependencies, setting OpenOCD paths/configs, selecting a probe, scanning for the ProbeStream control block, and starting the live stream.
+For the terminal UI, start by downloading the latest Windows or Linux bundle from the [ProbeStream releases page](https://github.com/EdwinFairchild/ProbeStream/releases/latest). Release builds include the Bun-compiled TUI binary, so you do not need Bun unless you are developing from source.
+
+Then follow the [TUI quick-start guide](docs/TUI-QuickStart.md). It covers setting OpenOCD paths/configs, selecting a probe, scanning for the ProbeStream control block, and starting the live stream.
 
 Legacy Python terminal path:
 

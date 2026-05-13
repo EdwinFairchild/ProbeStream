@@ -13,13 +13,37 @@ Terminal UI for real-time debug streaming over OpenOCD using the ProbeStream pro
 
 ## Prerequisites
 
-- **Bun** ≥ 1.3 — runtime and package manager (replaces Node/npm)
 - **Python** ≥ 3.10 — stdlib only, no pip packages required
 - **OpenOCD** — STM32CubeIDE ships one, or install separately
 - **A terminal** with kitty keyboard protocol support recommended (kitty, WezTerm, ghostty, Alacritty ≥ 0.14). Falls back gracefully on others.
 - **xclip** (Linux only) — for clipboard support
 
+Release builds include the Bun-compiled TUI binary, so users do not need Bun unless they are building from source.
+
+## Download a Release
+
+Download the latest platform bundle from the [ProbeStream releases page](https://github.com/EdwinFairchild/ProbeStream/releases/latest):
+
+- Windows: `probestream-tui-<version>-windows-x64.zip`
+- Linux: `probestream-tui-<version>-linux-x64.tar.gz`
+
+Extract the archive, then run the TUI from the extracted directory:
+
+```powershell
+# Windows PowerShell
+.\probestream-tui.exe
+```
+
+```bash
+# Linux
+./probestream-tui
+```
+
+The sidecar starts automatically from the bundled `sidecar` directory. Install OpenOCD separately and keep Python 3.10+ available on PATH.
+
 ## Install from Source
+
+Use this path only if you want to develop the TUI or build your own binary.
 
 ### 1. Install dependencies
 
@@ -73,7 +97,7 @@ bun run dev
 bun run dist
 ```
 
-Produces a standalone binary + sidecar in `../../probestream-tui-dist/`.
+Produces a standalone binary + sidecar in `../../probestream-tui-dist/`. On Windows the binary is `probestream-tui.exe`; on Linux it is `probestream-tui`.
 
 ## Quick Start
 

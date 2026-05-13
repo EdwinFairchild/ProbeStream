@@ -36,6 +36,9 @@ class FakeOpenOcdTcl:
         off = addr - self.base
         return struct.unpack_from("<I", self.mem, off)[0]
 
+    def mdw_n(self, addr: int, count: int) -> list[int]:
+        return [self.read_u32(addr + i * 4) for i in range(count)]
+
     def write_u32(self, addr: int, val: int) -> None:
         off = addr - self.base
         struct.pack_into("<I", self.mem, off, val)

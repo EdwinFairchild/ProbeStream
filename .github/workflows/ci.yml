@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tui:
+    name: TUI (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install TUI dependencies
+        working-directory: tools/tui
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck TUI
+        working-directory: tools/tui
+        run: bun run typecheck
+
+      - name: Run Bun tests
+        working-directory: tools/tui
+        run: bun test
+
+      - name: Run simulated sidecar tests
+        working-directory: tools/tui
+        run: python sidecar/test_probestream_reader.py -v
+
+  host-reader:
+    name: Host reader simulation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build C++ reader test
+        run: |
+          mkdir -p build/ci
+          g++ -std=c++17 -Ihost tests/test_reader.cpp host/ProbeStreamReader.cpp -o build/ci/test_reader
+
+      - name: Run C++ reader test
+        run: ./build/ci/test_reader

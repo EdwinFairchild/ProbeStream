@@ -1,0 +1,205 @@
+name: Release TUI
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  verify-tag:
+    name: Verify release tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      should_publish: ${{ steps.publish.outputs.should_publish }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify tag is on main
+        if: github.event_name == 'push'
+        run: |
+          git fetch origin main
+          tag_commit="$(git rev-list -n 1 "$GITHUB_REF_NAME")"
+          git merge-base --is-ancestor "$tag_commit" origin/main
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="$(python -c "import json; print(json.load(open('tools/tui/package.json'))['version'])")"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Decide publish mode
+        id: publish
+        shell: bash
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  validate:
+    name: Validate (${{ matrix.os }})
+    needs: verify-tag
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install TUI dependencies
+        working-directory: tools/tui
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck TUI
+        working-directory: tools/tui
+        run: bun run typecheck
+
+      - name: Run Bun tests
+        working-directory: tools/tui
+        run: bun test
+
+      - name: Run simulated sidecar tests
+        working-directory: tools/tui
+        run: python sidecar/test_probestream_reader.py -v
+
+  host-reader:
+    name: Host reader simulation
+    needs: verify-tag
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build C++ reader test
+        run: |
+          mkdir -p build/ci
+          g++ -std=c++17 -Ihost tests/test_reader.cpp host/ProbeStreamReader.cpp -o build/ci/test_reader
+
+      - name: Run C++ reader test
+        run: ./build/ci/test_reader
+
+  build:
+    name: Build ${{ matrix.platform }} bundle
+    needs: [verify-tag, validate, host-reader]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux-x64
+            binary: probestream-tui
+            archive: tar.gz
+          - os: windows-latest
+            platform: windows-x64
+            binary: probestream-tui.exe
+            archive: zip
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install TUI dependencies
+        working-directory: tools/tui
+        run: bun install --frozen-lockfile
+
+      - name: Build distribution directory
+        working-directory: tools/tui
+        run: bun scripts/build-dist.ts ../../dist/probestream-tui-${{ needs.verify-tag.outputs.version }}-${{ matrix.platform }}
+
+      - name: Verify distribution contents
+        shell: bash
+        run: |
+          test -f "dist/probestream-tui-${{ needs.verify-tag.outputs.version }}-${{ matrix.platform }}/${{ matrix.binary }}"
+          test -d "dist/probestream-tui-${{ needs.verify-tag.outputs.version }}-${{ matrix.platform }}/sidecar"
+
+      - name: Package Linux bundle
+        if: runner.os == 'Linux'
+        run: |
+          cd dist
+          tar -czf "probestream-tui-${{ needs.verify-tag.outputs.version }}-${{ matrix.platform }}.tar.gz" "probestream-tui-${{ needs.verify-tag.outputs.version }}-${{ matrix.platform }}"
+
+      - name: Package Windows bundle
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "dist/probestream-tui-${{ needs.verify-tag.outputs.version }}-${{ matrix.platform }}" -DestinationPath "dist/probestream-tui-${{ needs.verify-tag.outputs.version }}-${{ matrix.platform }}.zip"
+
+      - name: Upload release bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: probestream-tui-${{ needs.verify-tag.outputs.version }}-${{ matrix.platform }}
+          path: dist/probestream-tui-${{ needs.verify-tag.outputs.version }}-${{ matrix.platform }}.${{ matrix.archive }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: [verify-tag, build]
+    runs-on: ubuntu-latest
+    if: needs.verify-tag.outputs.should_publish == 'true'
+
+    steps:
+      - name: Download release bundles
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Generate checksums
+        working-directory: release-artifacts
+        run: sha256sum * > SHA256SUMS.txt
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ProbeStream TUI ${{ needs.verify-tag.outputs.version }}
+          files: |
+            release-artifacts/probestream-tui-${{ needs.verify-tag.outputs.version }}-linux-x64.tar.gz
+            release-artifacts/probestream-tui-${{ needs.verify-tag.outputs.version }}-windows-x64.zip
+            release-artifacts/SHA256SUMS.txt
+          generate_release_notes: true

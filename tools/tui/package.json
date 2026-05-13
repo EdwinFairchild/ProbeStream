@@ -9,7 +9,7 @@
     "start": "bun run src/index.tsx",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
-    "dist": "bash scripts/build-dist.sh"
+    "dist": "bun scripts/build-dist.ts"
   },
   "dependencies": {
     "@opentui/core": "0.2.0",

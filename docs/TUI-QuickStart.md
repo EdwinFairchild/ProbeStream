@@ -2,24 +2,53 @@
 
 This guide gets the ProbeStream TUI from zero to a live stream without using the Splash page auto-start shortcut.
 
-## 1. Install TUI Dependencies
+## 1. Download the TUI
 
-From the repository root:
+Download the latest platform bundle from the [ProbeStream releases page](https://github.com/EdwinFairchild/ProbeStream/releases/latest):
+
+- Windows: `probestream-tui-<version>-windows-x64.zip`
+- Linux: `probestream-tui-<version>-linux-x64.tar.gz`
+
+Extract it somewhere convenient. Release builds include the Bun-compiled TUI binary, so you do not need to install Bun.
+
+You still need:
+
+- Python 3.10+ on PATH for the bundled sidecar
+- OpenOCD installed or available through STM32CubeIDE
+- A terminal with good keyboard support, such as Windows Terminal, WezTerm, kitty, ghostty, or Alacritty
+
+### Source install for development
+
+If you are modifying the TUI or building your own binary, clone the repository and run the dependency installer from the repository root:
 
 ```bash
 # Linux / macOS
-bash tools/tui/scripts/install-deps.sh
+python3 tools/tui/scripts/install-deps.py
 ```
 
 On Windows PowerShell:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\tui\scripts\install-deps.ps1
+py tools\tui\scripts\install-deps.py
 ```
 
-The scripts install Bun if needed, repair the Bun PATH entry when the installer did not stick, and run `bun install` for the TUI package.
+The installer checks for Bun, installs it if needed, repairs the Bun PATH entry when the installer did not stick, and runs `bun install` for the TUI package.
 
 ## 2. Start the TUI
+
+From an extracted release bundle:
+
+```powershell
+# Windows PowerShell
+.\probestream-tui.exe
+```
+
+```bash
+# Linux
+./probestream-tui
+```
+
+From a source checkout:
 
 ```bash
 cd tools/tui
