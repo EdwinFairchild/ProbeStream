@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { resolve, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync } from "node:fs";
@@ -164,9 +164,15 @@ export async function ensureSidecar(opts: SupervisorOptions): Promise<Supervised
   const killGroup = IS_WINDOWS
     ? () => {
         if (!child.pid) return;
-        // On Windows, kill the whole process tree via taskkill.
+        // On Windows, kill the whole process tree via taskkill SYNCHRONOUSLY.
+        // Async spawn here would race with process.exit() in quit() and the
+        // sidecar (and its OpenOCD child) would be orphaned.
         try {
-          spawn("taskkill", ["/F", "/T", "/PID", String(child.pid)], { stdio: "ignore" });
+          spawnSync("taskkill", ["/F", "/T", "/PID", String(child.pid)], {
+            stdio: "ignore",
+            windowsHide: true,
+            timeout: 4000,
+          });
         } catch {
           try { child.kill(); } catch { /* ignore */ }
         }

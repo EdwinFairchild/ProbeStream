@@ -1,5 +1,7 @@
 # ProbeStream
 
+[![CI](https://github.com/EdwinFairchild/ProbeStream/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/EdwinFairchild/ProbeStream/actions/workflows/ci.yml) [![Release](https://github.com/EdwinFairchild/ProbeStream/actions/workflows/release.yml/badge.svg)](https://github.com/EdwinFairchild/ProbeStream/actions/workflows/release.yml) [![Latest release](https://img.shields.io/github/v/release/EdwinFairchild/ProbeStream?include_prereleases&sort=semver)](https://github.com/EdwinFairchild/ProbeStream/releases) [![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-blue)](https://github.com/EdwinFairchild/ProbeStream/releases) [![License](https://img.shields.io/github/license/EdwinFairchild/ProbeStream)](LICENSE)
+
 ![ProbeStream demo](PS.gif)
 
 ProbeStream is a clean-room, RTT-style bidirectional transport between a microcontroller and a host PC over the existing SWD/JTAG debug link. The MCU writes log/telemetry data into a ring buffer in its own RAM; the host reads the buffer through the debugger without ever halting the CPU. The host can also write to a second ring buffer to deliver commands back to the firmware.
