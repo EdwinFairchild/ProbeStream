@@ -104,6 +104,26 @@ static uint32_t rb_read(PS_Channel_t* ch, uint8_t* data, uint32_t maxLen)
     return total;
 }
 
+static inline uint32_t ps_type_flags(uint8_t type)
+{
+    return ((uint32_t)(type & PS_CHANNEL_TYPE_MASK)) << PS_CHANNEL_TYPE_SHIFT;
+}
+
+static inline void ps_mark_type(PS_Channel_t* ch, uint8_t type)
+{
+    uint32_t mode = ch->flags & PS_MODE_MASK;
+    ch->flags = mode | ps_type_flags(type);
+}
+
+static uint32_t ps_write_typed(uint8_t channel, const void* data, uint32_t numBytes, uint8_t type)
+{
+    if (!s_cb || channel >= s_cb->numUp || numBytes == 0)
+        return 0;
+
+    ps_mark_type(&s_cb->aUp[channel], type);
+    return PS_Write(channel, data, numBytes);
+}
+
 void PS_Init(const PS_Config_t* config)
 {
     if (!config || !config->pBuffer || config->numUpChannels == 0)
@@ -142,7 +162,7 @@ void PS_Init(const PS_Config_t* config)
         s_cb->aUp[i].size    = perChannel;
         s_cb->aUp[i].wrOff   = 0;
         s_cb->aUp[i].rdOff   = 0;
-        s_cb->aUp[i].flags   = config->defaultMode;
+        s_cb->aUp[i].flags   = config->defaultMode & PS_MODE_MASK;
         dataPtr += perChannel;
     }
 
@@ -151,7 +171,7 @@ void PS_Init(const PS_Config_t* config)
         s_cb->aDown[i].size    = perChannel;
         s_cb->aDown[i].wrOff   = 0;
         s_cb->aDown[i].rdOff   = 0;
-        s_cb->aDown[i].flags   = config->defaultMode;
+        s_cb->aDown[i].flags   = config->defaultMode & PS_MODE_MASK;
         dataPtr += perChannel;
     }
 
@@ -167,7 +187,7 @@ uint32_t PS_Write(uint8_t channel, const void* data, uint32_t numBytes)
         return 0;
 
     PS_Channel_t* ch = &s_cb->aUp[channel];
-    uint32_t mode = ch->flags;
+    uint32_t mode = ch->flags & PS_MODE_MASK;
 
     if (mode == PS_MODE_BLOCK) {
         uint32_t written = 0;
@@ -199,6 +219,42 @@ uint32_t PS_WriteString(uint8_t channel, const char* str)
     return PS_Write(channel, str, len);
 }
 
+uint32_t PS_WriteInt(uint8_t channel, int32_t value)
+{
+    uint8_t bytes[4] = {
+        (uint8_t)((uint32_t)value & 0xffu),
+        (uint8_t)(((uint32_t)value >> 8) & 0xffu),
+        (uint8_t)(((uint32_t)value >> 16) & 0xffu),
+        (uint8_t)(((uint32_t)value >> 24) & 0xffu),
+    };
+    return ps_write_typed(channel, bytes, sizeof(bytes), PS_CHANNEL_TYPE_INT32);
+}
+
+uint32_t PS_WriteUInt(uint8_t channel, uint32_t value)
+{
+    uint8_t bytes[4] = {
+        (uint8_t)(value & 0xffu),
+        (uint8_t)((value >> 8) & 0xffu),
+        (uint8_t)((value >> 16) & 0xffu),
+        (uint8_t)((value >> 24) & 0xffu),
+    };
+    return ps_write_typed(channel, bytes, sizeof(bytes), PS_CHANNEL_TYPE_UINT32);
+}
+
+uint32_t PS_WriteFloat(uint8_t channel, float value)
+{
+    uint8_t bytes[sizeof(float)];
+    memcpy(bytes, &value, sizeof(bytes));
+    return ps_write_typed(channel, bytes, sizeof(bytes), PS_CHANNEL_TYPE_FLOAT32);
+}
+
+uint32_t PS_WriteDouble(uint8_t channel, double value)
+{
+    uint8_t bytes[sizeof(double)];
+    memcpy(bytes, &value, sizeof(bytes));
+    return ps_write_typed(channel, bytes, sizeof(bytes), PS_CHANNEL_TYPE_FLOAT64);
+}
+
 uint32_t PS_Read(uint8_t channel, void* data, uint32_t maxBytes)
 {
     if (!s_cb || channel >= s_cb->numDown || maxBytes == 0)
@@ -217,7 +273,14 @@ void PS_SetMode(uint8_t channel, uint8_t mode)
 {
     if (!s_cb || channel >= s_cb->numUp)
         return;
-    s_cb->aUp[channel].flags = mode;
+    s_cb->aUp[channel].flags = (s_cb->aUp[channel].flags & ~PS_MODE_MASK) | (mode & PS_MODE_MASK);
+}
+
+void PS_SetChannelType(uint8_t channel, uint8_t type)
+{
+    if (!s_cb || channel >= s_cb->numUp)
+        return;
+    ps_mark_type(&s_cb->aUp[channel], type);
 }
 
 PS_ControlBlock_t* PS_GetControlBlock(void)

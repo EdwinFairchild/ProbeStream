@@ -25,6 +25,20 @@ static constexpr uint32_t CH_OFF_RDOFF   = 12;
 static constexpr uint32_t CH_OFF_FLAGS   = 16;
 static constexpr uint32_t CH_DESC_SIZE   = 20;
 
+static constexpr uint32_t MODE_MASK = 0x03;
+static constexpr uint32_t CHANNEL_TYPE_SHIFT = 2;
+static constexpr uint32_t CHANNEL_TYPE_MASK = 0x0f;
+
+enum class ChannelType : uint8_t {
+    Raw = 0,
+    Text = 1,
+    AsciiNumber = 2,
+    Int32 = 3,
+    UInt32 = 4,
+    Float32 = 5,
+    Float64 = 6,
+};
+
 inline uint32_t upChannelOffset(uint32_t index) {
     return HEADER_SIZE + index * CH_DESC_SIZE;
 }

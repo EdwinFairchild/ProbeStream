@@ -427,6 +427,9 @@ class StreamService:
 
     def status(self) -> dict:
         uptime = (time.time() - self.start_time) * 1000 if self.active else 0
+        if self.reader.attached:
+            self.reader.refresh_channel_info()
+        channel_info = [ch.info(i) for i, ch in enumerate(self.reader.up_channels)] if self.reader.attached else []
         return {
             "active": self.active,
             "sessionId": "default",
@@ -434,7 +437,8 @@ class StreamService:
             "totalBatches": self.total_batches,
             "droppedBatches": self.dropped_batches,
             "uptimeMs": int(uptime),
-            "channels": list(range(self.reader.num_up)) if self.reader.attached else [],
+            "channels": [ch["index"] for ch in channel_info],
+            "channelInfo": channel_info,
         }
 
     def send(self, channel: int, data: bytes) -> dict:
@@ -467,6 +471,12 @@ class StreamService:
                         "byteCount": len(data),
                         "payload": base64.b64encode(data).decode(),
                     }
+                    if 0 <= ch < len(self.reader.up_channels):
+                        info = self.reader.up_channels[ch].info(ch)
+                        batch["channelFlags"] = info["flags"]
+                        batch["channelType"] = info["channelType"]
+                        batch["channelTypeName"] = info["channelTypeName"]
+                        batch["graphable"] = info["graphable"]
                     self.total_bytes += len(data)
                     self.total_batches += 1
                     self.sse.broadcast(batch)

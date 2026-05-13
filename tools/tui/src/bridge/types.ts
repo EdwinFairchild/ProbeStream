@@ -56,6 +56,10 @@ export interface ChannelInfo {
   wrOff: number;
   rdOff: number;
   flags: number;
+  mode?: number;
+  channelType?: number;
+  channelTypeName?: string;
+  graphable?: boolean;
 }
 
 export interface DiscoverResult {
@@ -73,6 +77,10 @@ export interface StreamBatch {
   channel: number;
   byteCount: number;
   payload: string; // base64
+  channelFlags?: number;
+  channelType?: number;
+  channelTypeName?: string;
+  graphable?: boolean;
 }
 
 export interface StreamStatus {
@@ -83,6 +91,7 @@ export interface StreamStatus {
   droppedBatches: number;
   uptimeMs: number;
   channels: number[];
+  channelInfo?: ChannelInfo[];
 }
 
 export interface CaptureStatus {

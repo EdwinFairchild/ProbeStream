@@ -19,11 +19,20 @@ describe("settings", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
+  test("all defs are either cycleable or editable", () => {
+    for (const def of SETTING_DEFS) {
+      expect(canCycleValue(def) || canOpenValueEditor(def)).toBe(true);
+    }
+  });
+
   test("withDefaults fills missing keys", () => {
     const s = withDefaults({});
     expect(s.themeName).toBe("probe");
     expect(s.autoscroll).toBe(true);
     expect(s.tclPort).toBe("6666");
+    expect(s.graphWindowSize).toBe("256");
+    expect(s.graphChannels).toBe("");
+    expect(s.statsChannels).toBe("");
   });
 
   test("withDefaults preserves existing keys", () => {
@@ -49,7 +58,7 @@ describe("settings", () => {
     expect(getString({}, "nonexistent")).toBe("");
   });
 
-  test("predefined selects cycle unless they allow custom values", () => {
+  test("selects cycle and custom selects can also open an editor", () => {
     const theme = SETTING_DEFS.find((d) => d.id === "themeName")!;
     const tclPort = SETTING_DEFS.find((d) => d.id === "tclPort")!;
     const scanChunkSize = SETTING_DEFS.find((d) => d.id === "scanChunkSize")!;
@@ -57,8 +66,11 @@ describe("settings", () => {
 
     expect(canCycleValue(theme)).toBe(true);
     expect(canOpenValueEditor(theme)).toBe(false);
+    expect(canCycleValue(tclPort)).toBe(true);
     expect(canOpenValueEditor(tclPort)).toBe(true);
+    expect(canCycleValue(scanChunkSize)).toBe(true);
     expect(canOpenValueEditor(scanChunkSize)).toBe(true);
+    expect(canCycleValue(openocdPath)).toBe(false);
     expect(canOpenValueEditor(openocdPath)).toBe(true);
   });
 

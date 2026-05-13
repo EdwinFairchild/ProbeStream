@@ -29,6 +29,28 @@ CH_OFF_RDOFF = 12
 CH_OFF_FLAGS = 16
 CH_DESC_SIZE = 20
 
+MODE_MASK = 0x03
+CHANNEL_TYPE_SHIFT = 2
+CHANNEL_TYPE_MASK = 0x0F
+
+CHANNEL_TYPE_RAW = 0
+CHANNEL_TYPE_TEXT = 1
+CHANNEL_TYPE_ASCII_NUMBER = 2
+CHANNEL_TYPE_INT32 = 3
+CHANNEL_TYPE_UINT32 = 4
+CHANNEL_TYPE_FLOAT32 = 5
+CHANNEL_TYPE_FLOAT64 = 6
+
+CHANNEL_TYPE_NAMES = {
+    CHANNEL_TYPE_RAW: "raw",
+    CHANNEL_TYPE_TEXT: "text",
+    CHANNEL_TYPE_ASCII_NUMBER: "ascii-number",
+    CHANNEL_TYPE_INT32: "int32",
+    CHANNEL_TYPE_UINT32: "uint32",
+    CHANNEL_TYPE_FLOAT32: "float32",
+    CHANNEL_TYPE_FLOAT64: "float64",
+}
+
 
 def up_channel_offset(index: int) -> int:
     return HEADER_SIZE + index * CH_DESC_SIZE
@@ -46,6 +68,42 @@ class ChannelState:
     rd_off: int = 0
     flags: int = 0
     desc_addr: int = 0
+
+    @property
+    def mode(self) -> int:
+        return self.flags & MODE_MASK
+
+    @property
+    def channel_type(self) -> int:
+        return (self.flags >> CHANNEL_TYPE_SHIFT) & CHANNEL_TYPE_MASK
+
+    @property
+    def channel_type_name(self) -> str:
+        return CHANNEL_TYPE_NAMES.get(self.channel_type, "unknown")
+
+    @property
+    def graphable(self) -> bool:
+        return self.channel_type in {
+            CHANNEL_TYPE_ASCII_NUMBER,
+            CHANNEL_TYPE_INT32,
+            CHANNEL_TYPE_UINT32,
+            CHANNEL_TYPE_FLOAT32,
+            CHANNEL_TYPE_FLOAT64,
+        }
+
+    def info(self, index: int) -> dict:
+        return {
+            "index": index,
+            "bufferAddr": self.p_buffer,
+            "size": self.size,
+            "wrOff": self.wr_off,
+            "rdOff": self.rd_off,
+            "flags": self.flags,
+            "mode": self.mode,
+            "channelType": self.channel_type,
+            "channelTypeName": self.channel_type_name,
+            "graphable": self.graphable,
+        }
 
 
 DataCallback = Callable[[int, bytes], None]
@@ -132,10 +190,11 @@ class ProbeStreamReader:
             # One round-trip for both offsets (firmware writes wr, we own rd,
             # so a stale read here is harmless: we just defer leftover bytes
             # to the next poll).
-            offsets = self.tcl.mdw_n(ch.desc_addr + CH_OFF_WROFF, 2)
-            if len(offsets) < 2:
+            offsets = self.tcl.mdw_n(ch.desc_addr + CH_OFF_WROFF, 3)
+            if len(offsets) < 3:
                 continue
-            wr_off, rd_off = offsets[0], offsets[1]
+            wr_off, rd_off, flags = offsets[0], offsets[1], offsets[2]
+            ch.flags = flags
 
             if wr_off == rd_off:
                 continue
@@ -175,6 +234,15 @@ class ProbeStreamReader:
             total_read += len(data)
 
         return total_read
+
+    def refresh_channel_info(self) -> None:
+        for ch in self.up_channels:
+            try:
+                values = self.tcl.mdw_n(ch.desc_addr + CH_OFF_WROFF, 3)
+                if len(values) >= 3:
+                    ch.wr_off, ch.rd_off, ch.flags = values[0], values[1], values[2]
+            except Exception:
+                continue
 
     def write_down(self, channel: int, data: bytes) -> int:
         if channel >= self.num_down or len(data) == 0:

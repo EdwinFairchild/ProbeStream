@@ -20,6 +20,8 @@ from probestream_reader import (
     CH_OFF_WROFF,
     CH_OFF_RDOFF,
     CH_OFF_FLAGS,
+    CHANNEL_TYPE_FLOAT32,
+    CHANNEL_TYPE_SHIFT,
     up_channel_offset,
     down_channel_offset,
 )
@@ -69,6 +71,7 @@ def build_control_block(
     max_down: int = 1,
     up_buf_addr: int = 0,
     up_buf_size: int = 256,
+    up_flags: int = 0,
     down_buf_addr: int = 0,
     down_buf_size: int = 128,
 ):
@@ -91,7 +94,7 @@ def build_control_block(
     struct.pack_into("<I", tcl.mem, up_desc + CH_OFF_SIZE, up_buf_size)
     struct.pack_into("<I", tcl.mem, up_desc + CH_OFF_WROFF, 0)
     struct.pack_into("<I", tcl.mem, up_desc + CH_OFF_RDOFF, 0)
-    struct.pack_into("<I", tcl.mem, up_desc + CH_OFF_FLAGS, 0)
+    struct.pack_into("<I", tcl.mem, up_desc + CH_OFF_FLAGS, up_flags)
 
     # Down channel 0
     down_desc = base + HEADER_SIZE + max_up * CH_DESC_SIZE
@@ -143,6 +146,36 @@ class TestDiscover(unittest.TestCase):
 
 
 class TestPollUp(unittest.TestCase):
+    def test_channel_type_from_flags(self):
+        tcl = FakeOpenOcdTcl()
+        cb_addr = 0x20000100
+        flags = CHANNEL_TYPE_FLOAT32 << CHANNEL_TYPE_SHIFT
+        build_control_block(tcl, cb_addr, up_flags=flags)
+
+        reader = ProbeStreamReader(tcl)
+        reader.attach(cb_addr)
+
+        self.assertEqual(reader.up_channels[0].channel_type, CHANNEL_TYPE_FLOAT32)
+        self.assertEqual(reader.up_channels[0].channel_type_name, "float32")
+        self.assertTrue(reader.up_channels[0].graphable)
+
+    def test_poll_updates_channel_flags(self):
+        tcl = FakeOpenOcdTcl()
+        cb_addr = 0x20000100
+        up_buf, _ = build_control_block(tcl, cb_addr, up_buf_size=64)
+
+        reader = ProbeStreamReader(tcl)
+        reader.attach(cb_addr)
+
+        flags = CHANNEL_TYPE_FLOAT32 << CHANNEL_TYPE_SHIFT
+        tcl.write_u32(reader.up_channels[0].desc_addr + CH_OFF_FLAGS, flags)
+        tcl._write_raw(up_buf, b"\x00\x00\x20\x41")
+        tcl.write_u32(reader.up_channels[0].desc_addr + CH_OFF_WROFF, 4)
+
+        reader.poll_up(lambda ch, data: None)
+
+        self.assertEqual(reader.up_channels[0].channel_type, CHANNEL_TYPE_FLOAT32)
+
     def test_read_contiguous(self):
         tcl = FakeOpenOcdTcl()
         cb_addr = 0x20000100

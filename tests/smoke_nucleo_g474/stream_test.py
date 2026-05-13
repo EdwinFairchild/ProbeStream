@@ -21,6 +21,7 @@ Options:
 
 import argparse
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -48,7 +49,12 @@ OPENOCD_BIN_DEFAULT = (
     "com.st.stm32cube.ide.mcu.externaltools.openocd.linux64_2.4.100.202501161620/"
     "tools/bin/openocd"
 )
-OPENOCD_SCRIPTS = "/media/eddie/Engineering/Projects/ViewAlyzer_Root/external/OpenOCD/tcl"
+OPENOCD_SCRIPTS_DEFAULT = "/media/eddie/Engineering/Projects/ViewAlyzer_Root/external/OpenOCD/tcl"
+OPENOCD_SCRIPTS_CANDIDATES = [
+    REPO_ROOT.parent / "external" / "OpenOCD" / "tcl",
+    Path(r"C:\opeonocd_12.0.3\share\openocd\scripts"),
+    Path(r"C:\openocd\share\openocd\scripts"),
+]
 G4_STLINK_SN    = "0033004B3033510735393935"
 TCL_PORT        = 6667   # use a separate port so we don't stomp a running dev session
 RAM_START       = 0x20000000
@@ -67,10 +73,12 @@ def build(skip_build: bool, debug: bool) -> Path:
         log(f"Using existing ELF: {elf}")
         return elf
 
+    clean_stale_cmake_cache(BUILD_DIR)
+
     log("Configuring CMake (stress test)…")
     BUILD_DIR.mkdir(exist_ok=True)
     cmake_cmd = [
-        "cmake", "-S", str(G4_DIR), "-B", str(BUILD_DIR),
+        "cmake", "-S", str(G4_DIR), "-B", str(BUILD_DIR), "-G", "Ninja",
         "-DCMAKE_BUILD_TYPE=Debug",
         "-DSTRESS_TEST=ON",
     ]
@@ -86,14 +94,15 @@ def build(skip_build: bool, debug: bool) -> Path:
     return elf
 
 
-def flash(elf: Path, ocd_bin: str, debug: bool):
+def flash(elf: Path, ocd_bin: str, scripts_dir: Path, stlink_sn: str, debug: bool):
     log(f"Flashing {elf.name} via OpenOCD…")
+    elf_tcl_path = elf.resolve().as_posix()
     cmd = [
-        ocd_bin, "-s", OPENOCD_SCRIPTS,
-        "-c", f"adapter serial {G4_STLINK_SN}",
+        ocd_bin, "-s", str(scripts_dir),
+        "-c", f"adapter serial {stlink_sn}",
         "-f", "interface/stlink.cfg",
         "-f", "target/stm32g4x.cfg",
-        "-c", f'program "{elf}" verify reset exit',
+        "-c", f"program {{{elf_tcl_path}}} verify reset exit",
     ]
     run(cmd, debug)
     log("Flash complete — board is running new firmware")
@@ -104,7 +113,7 @@ def flash(elf: Path, ocd_bin: str, debug: bool):
 # OpenOCD management
 # ---------------------------------------------------------------------------
 
-def start_openocd(ocd_bin: str, debug: bool) -> subprocess.Popen:
+def start_openocd(ocd_bin: str, scripts_dir: Path, stlink_sn: str, debug: bool) -> subprocess.Popen:
     log(f"Starting OpenOCD (port {TCL_PORT})…")
     kwargs: dict = {
         "start_new_session": True,
@@ -118,8 +127,8 @@ def start_openocd(ocd_bin: str, debug: bool) -> subprocess.Popen:
 
     proc = subprocess.Popen(
         [
-            ocd_bin, "-s", OPENOCD_SCRIPTS,
-            "-c", f"adapter serial {G4_STLINK_SN}",
+            ocd_bin, "-s", str(scripts_dir),
+            "-c", f"adapter serial {stlink_sn}",
             "-f", "interface/stlink.cfg",
             "-f", "target/stm32g4x.cfg",
             "-c", f"tcl_port {TCL_PORT}",
@@ -339,6 +348,53 @@ def run(cmd: list, debug: bool):
         die(f"Command failed (exit {result.returncode}): {cmd[0]}")
 
 
+def clean_stale_cmake_cache(build_dir: Path):
+    cache = build_dir / "CMakeCache.txt"
+    files_dir = build_dir / "CMakeFiles"
+    if not cache.exists():
+        return
+
+    text = cache.read_text(errors="ignore")
+    stale_markers = ["/opt/st/", "/media/eddie/", "CMAKE_MAKE_PROGRAM:FILEPATH=/opt/"]
+    stale = any(marker in text.replace("\\", "/") for marker in stale_markers)
+
+    if not stale:
+        for line in text.splitlines():
+            if line.startswith("CMAKE_MAKE_PROGRAM:FILEPATH="):
+                make_program = Path(line.split("=", 1)[1])
+                stale = not make_program.exists()
+                break
+
+    if stale:
+        log("Removing stale CMake cache before Windows reconfigure")
+        cache.unlink(missing_ok=True)
+        shutil.rmtree(files_dir, ignore_errors=True)
+
+
+def resolve_openocd_bin(requested: str) -> str:
+    if requested and Path(requested).exists():
+        return requested
+    fallback = shutil.which("openocd") or shutil.which("openocd.exe")
+    if not fallback:
+        die(f"OpenOCD binary not found at {requested} and not on PATH")
+    log(f"OpenOCD not found at default path; using {fallback}")
+    return fallback
+
+
+def resolve_openocd_scripts(requested: str | None) -> Path:
+    candidates = []
+    if requested:
+        candidates.append(Path(requested))
+    candidates.append(Path(OPENOCD_SCRIPTS_DEFAULT))
+    candidates.extend(OPENOCD_SCRIPTS_CANDIDATES)
+
+    for candidate in candidates:
+        if (candidate / "interface" / "stlink.cfg").exists() and (candidate / "target" / "stm32g4x.cfg").exists():
+            return candidate
+    checked = ", ".join(str(path) for path in candidates)
+    die(f"OpenOCD scripts not found; checked: {checked}")
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -355,6 +411,10 @@ def main():
                         help="Skip CMake rebuild; flash existing build_stress/ ELF")
     parser.add_argument("--openocd-bin", default=OPENOCD_BIN_DEFAULT,
                         help="Path to OpenOCD binary")
+    parser.add_argument("--openocd-scripts", default=None,
+                        help="Path to OpenOCD scripts directory")
+    parser.add_argument("--stlink-sn", default=G4_STLINK_SN,
+                        help="ST-LINK serial number for the G4 board")
     parser.add_argument("--debug",       action="store_true",
                         help="Verbose output")
     args = parser.parse_args()
@@ -366,24 +426,19 @@ def main():
     print("=" * 60)
     print()
 
-    ocd_bin = args.openocd_bin
-    if not Path(ocd_bin).exists():
-        # fallback to PATH
-        import shutil
-        fallback = shutil.which("openocd")
-        if not fallback:
-            die(f"OpenOCD binary not found at {ocd_bin} and not on PATH")
-        log(f"OpenOCD not found at default path; using {fallback}")
-        ocd_bin = fallback
+    ocd_bin = resolve_openocd_bin(args.openocd_bin)
+    scripts_dir = resolve_openocd_scripts(args.openocd_scripts)
+    log(f"OpenOCD scripts: {scripts_dir}")
+    log(f"ST-LINK serial: {args.stlink_sn}")
 
     # 1. Build + flash
     if not args.skip_flash:
         elf = build(skip_build=args.skip_build, debug=args.debug)
-        flash(elf, ocd_bin, debug=args.debug)
+        flash(elf, ocd_bin, scripts_dir, args.stlink_sn, debug=args.debug)
         time.sleep(0.5)   # give firmware time to initialise after reset
 
     # 2. Start streaming OpenOCD
-    ocd = start_openocd(ocd_bin, debug=args.debug)
+    ocd = start_openocd(ocd_bin, scripts_dir, args.stlink_sn, debug=args.debug)
 
     try:
         # 3. Connect Tcl

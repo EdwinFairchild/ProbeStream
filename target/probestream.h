@@ -14,6 +14,19 @@ extern "C" {
 #define PS_MODE_TRIM    1   /* Write what fits, drop the rest. */
 #define PS_MODE_BLOCK   2   /* Spin until space is available. */
 
+#define PS_MODE_MASK    0x03u
+
+/* Per-channel payload type. Low flag bits remain reserved for PS_MODE_*. */
+#define PS_CHANNEL_TYPE_SHIFT        2u
+#define PS_CHANNEL_TYPE_MASK         0x0Fu
+#define PS_CHANNEL_TYPE_RAW          0u
+#define PS_CHANNEL_TYPE_TEXT         1u
+#define PS_CHANNEL_TYPE_ASCII_NUMBER 2u
+#define PS_CHANNEL_TYPE_INT32        3u
+#define PS_CHANNEL_TYPE_UINT32       4u
+#define PS_CHANNEL_TYPE_FLOAT32      5u
+#define PS_CHANNEL_TYPE_FLOAT64      6u
+
 #if PS_ENABLED
 
 typedef struct {
@@ -45,9 +58,14 @@ typedef struct {
 void        PS_Init(const PS_Config_t* config);
 uint32_t    PS_Write(uint8_t channel, const void* data, uint32_t numBytes);
 uint32_t    PS_WriteString(uint8_t channel, const char* str);
+uint32_t    PS_WriteInt(uint8_t channel, int32_t value);
+uint32_t    PS_WriteUInt(uint8_t channel, uint32_t value);
+uint32_t    PS_WriteFloat(uint8_t channel, float value);
+uint32_t    PS_WriteDouble(uint8_t channel, double value);
 uint32_t    PS_Read(uint8_t channel, void* data, uint32_t maxBytes);
 uint32_t    PS_HasData(uint8_t channel);
 void        PS_SetMode(uint8_t channel, uint8_t mode);
+void        PS_SetChannelType(uint8_t channel, uint8_t type);
 
 #if PS_ENABLE_PRINTF
 #include <stdarg.h>
@@ -62,9 +80,14 @@ PS_ControlBlock_t* PS_GetControlBlock(void);
 #define PS_Init(cfg)                        ((void)0)
 #define PS_Write(ch, data, len)             ((uint32_t)0)
 #define PS_WriteString(ch, str)             ((uint32_t)0)
+#define PS_WriteInt(ch, value)              ((uint32_t)0)
+#define PS_WriteUInt(ch, value)             ((uint32_t)0)
+#define PS_WriteFloat(ch, value)            ((uint32_t)0)
+#define PS_WriteDouble(ch, value)           ((uint32_t)0)
 #define PS_Read(ch, data, max)              ((uint32_t)0)
 #define PS_HasData(ch)                      ((uint32_t)0)
 #define PS_SetMode(ch, mode)                ((void)0)
+#define PS_SetChannelType(ch, type)         ((void)0)
 #if PS_ENABLE_PRINTF
 #define PS_Printf(ch, fmt, ...)             ((int)0)
 #endif

@@ -141,6 +141,72 @@ export class ChunkRingBuffer {
   }
 }
 
+/**
+ * Keeps a separate ring buffer per channel so a noisy channel can't evict
+ * data on a quiet one. Each channel retains the most recent `capacityPerChannel`
+ * chunks; older ones are dropped silently. This lets the TUI stream forever
+ * without unbounded memory growth.
+ */
+export class ChannelChunkStore {
+  private rings = new Map<number, ChunkRingBuffer>();
+
+  constructor(private capacityPerChannel: number) {}
+
+  setCapacity(capacity: number): void {
+    if (capacity === this.capacityPerChannel) return;
+    this.capacityPerChannel = capacity;
+    // Re-bucket existing chunks into new rings so the per-channel cap takes
+    // effect immediately without losing the most recent data.
+    const next = new Map<number, ChunkRingBuffer>();
+    for (const [channel, ring] of this.rings) {
+      const fresh = new ChunkRingBuffer(capacity);
+      for (const chunk of ring.toArray()) fresh.push(chunk);
+      next.set(channel, fresh);
+    }
+    this.rings = next;
+  }
+
+  push(chunk: StreamChunk): void {
+    let ring = this.rings.get(chunk.channel);
+    if (!ring) {
+      ring = new ChunkRingBuffer(this.capacityPerChannel);
+      this.rings.set(chunk.channel, ring);
+    }
+    ring.push(chunk);
+  }
+
+  clear(): void {
+    this.rings.clear();
+  }
+
+  /** Merged view in seq order across all channels. */
+  toArray(): StreamChunk[] {
+    if (this.rings.size === 0) return [];
+    if (this.rings.size === 1) {
+      // Fast path: single channel needs no sort.
+      return [...this.rings.values()][0]!.toArray();
+    }
+    const out: StreamChunk[] = [];
+    for (const ring of this.rings.values()) {
+      for (const chunk of ring.toArray()) out.push(chunk);
+    }
+    out.sort((a, b) => a.seq - b.seq);
+    return out;
+  }
+
+  get length(): number {
+    let total = 0;
+    for (const ring of this.rings.values()) total += ring.length;
+    return total;
+  }
+
+  totalBytes(): number {
+    let total = 0;
+    for (const ring of this.rings.values()) total += ring.totalBytes();
+    return total;
+  }
+}
+
 export function formatTimestamp(ts: number): string {
   const d = new Date(ts);
   const h = d.getHours().toString().padStart(2, "0");

@@ -37,7 +37,17 @@ All multi-byte fields are little-endian, which on every supported Cortex-M targe
 | 4  | 4 | `size`    | Size of the ring in bytes. |
 | 8  | 4 | `wrOff`   | Write offset into the ring (writer-only). |
 | 12 | 4 | `rdOff`   | Read offset into the ring (reader-only). |
-| 16 | 4 | `flags`   | Per-channel flags. Bit field; currently only the mode (`PS_MODE_*`) lives in the low byte. |
+| 16 | 4 | `flags`   | Per-channel flags: bits `[1:0]` are mode, bits `[5:2]` are channel type. |
+
+`flags` bit layout:
+
+| Bits | Mask | Meaning |
+|---|---|---|
+| `[1:0]` | `0x00000003` | Full-buffer mode: `0` skip, `1` trim, `2` block. |
+| `[5:2]` | `0x0000003c` | Channel type: `0` raw, `1` text, `2` ASCII number, `3` int32, `4` uint32, `5` float32, `6` float64. |
+| `[31:6]` | | Reserved; readers must ignore unknown bits. |
+
+Channel type describes the whole channel. Numeric host features such as graphing and running stats should only decode channels whose type is ASCII number, int32, uint32, float32, or float64.
 
 ## Descriptor layout
 

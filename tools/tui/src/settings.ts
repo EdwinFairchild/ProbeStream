@@ -180,12 +180,13 @@ export const SETTING_DEFS: SettingDef[] = [
     default: true,
   },
   {
-    id: "maxBufferedChunks",
-    label: "Max buffered chunks",
-    description: "Maximum stream chunks retained in the UI ring buffer.",
+    id: "chunkHistoryPerChannel",
+    label: "Stream history",
+    description: "Stream chunks retained per channel. Older chunks are dropped to keep memory bounded during long sessions.",
     type: "select",
-    options: ["256", "512", "1024", "2048"],
-    default: "1024",
+    options: ["100", "250", "500", "1000", "2000", "5000"],
+    default: "500",
+    allowCustom: true,
   },
   {
     id: "maxStreamSplits",
@@ -194,6 +195,29 @@ export const SETTING_DEFS: SettingDef[] = [
     type: "select",
     options: ["1", "2", "3", "4"],
     default: "2",
+  },
+  {
+    id: "graphWindowSize",
+    label: "Graph window size",
+    description: "Maximum numeric samples retained per graphed channel.",
+    type: "select",
+    options: ["64", "128", "256", "512", "1024"],
+    default: "256",
+    allowCustom: true,
+  },
+  {
+    id: "graphChannels",
+    label: "Graph channels",
+    description: "Comma-separated up-channel indexes with graph panes enabled.",
+    type: "string",
+    default: "",
+  },
+  {
+    id: "statsChannels",
+    label: "Stats channels",
+    description: "Comma-separated up-channel indexes with running stats enabled.",
+    type: "string",
+    default: "",
   },
 ];
 
@@ -204,7 +228,7 @@ export function canOpenValueEditor(def: SettingDef): boolean {
 }
 
 export function canCycleValue(def: SettingDef): boolean {
-  return def.type === "bool" || (def.type === "select" && def.allowCustom !== true);
+  return def.type === "bool" || def.type === "select";
 }
 
 export function nextSettingValue(def: SettingDef, current: unknown): unknown {

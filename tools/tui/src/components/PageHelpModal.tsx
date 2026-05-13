@@ -64,6 +64,8 @@ const PAGE_HELP: Record<PageHelpId, string[]> = {
         "",
         "Useful commands:",
         "  /channel <n>   View one up-channel",
+        "  /channel <n> graph-on|graph-off",
+        "  /channel <n> stats-on|stats-off",
         "  /channel merge Show all up-channels with prefixes",
         "  /channel split Split channels into panes",
         "  /mode <m>      raw | hex | ascii | line",

@@ -1,4 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useKeyboard, useTerminalDimensions } from "@opentui/react";
+import { fg, StyledText } from "@opentui/core";
+import { isTabKey } from "../keyboard.ts";
 import { theme } from "../theme.ts";
 import { Panel } from "../components/Panel.tsx";
 import { MetricStrip, type Metric } from "../components/MetricStrip.tsx";
@@ -8,13 +11,23 @@ import type { StreamBatch, StreamStatus, CaptureStatus } from "../bridge/types.t
 import {
   type DisplayMode,
   type StreamChunk,
-  ChunkRingBuffer,
+  ChannelChunkStore,
   decodeBase64,
   formatBytes,
   formatByteCount,
   formatRate,
   formatTimestamp,
 } from "../decoders/index.ts";
+import {
+  NumericRingBuffer,
+  RunningStats,
+  channelTypeLabel,
+  decodeNumericSamples,
+  formatNumericSamples,
+  formatGraphNumber,
+  isGraphableChannelType,
+  renderAreaGraph,
+} from "../graphing.ts";
 
 interface Props {
   client: BridgeClient;
@@ -24,7 +37,10 @@ interface Props {
   channelLayout: StreamChannelLayout;
   maxVisibleChannels: number;
   autoscroll: boolean;
-  maxBufferedChunks: number;
+  chunkHistoryPerChannel: number;
+  graphWindowSize: number;
+  graphEnabledChannels: number[];
+  statsEnabledChannels: number[];
   terminalMode: boolean;
   downChannel: number;
   recentCommands: CommandHistoryEntry[];
@@ -33,6 +49,45 @@ interface Props {
 }
 
 export type StreamChannelLayout = "single" | "merge" | "split";
+
+/**
+ * Build a single styled row from the head + body layers of an area chart.
+ * Head cells (the curve edge) get the bright colour; body cells (the fill
+ * below the curve) get the dim colour. Spaces stay uncoloured. Consecutive
+ * cells with the same colour are merged into one chunk to keep the chunk
+ * count small.
+ */
+function composeAreaRow(head: string, body: string, headColor: string, bodyColor: string): StyledText {
+  const len = Math.max(head.length, body.length);
+  const chunks: { kind: "head" | "body" | "blank"; text: string }[] = [];
+  let runKind: "head" | "body" | "blank" | null = null;
+  let runStart = 0;
+  const flush = (endIdx: number) => {
+    if (runKind === null || endIdx <= runStart) return;
+    const slice = runKind === "head"
+      ? head.slice(runStart, endIdx)
+      : runKind === "body"
+        ? body.slice(runStart, endIdx)
+        : " ".repeat(endIdx - runStart);
+    chunks.push({ kind: runKind, text: slice });
+  };
+  for (let i = 0; i < len; i++) {
+    const h = head[i] ?? " ";
+    const b = body[i] ?? " ";
+    const kind: "head" | "body" | "blank" = h !== " " ? "head" : b !== " " ? "body" : "blank";
+    if (kind !== runKind) {
+      flush(i);
+      runKind = kind;
+      runStart = i;
+    }
+  }
+  flush(len);
+  return new StyledText(chunks.map((c) => {
+    if (c.kind === "head") return fg(headColor)(c.text);
+    if (c.kind === "body") return fg(bodyColor)(c.text);
+    return { __isChunk: true, text: c.text } as const;
+  }));
+}
 
 export interface CommandHistoryEntry {
   id: number;
@@ -50,32 +105,78 @@ export function StreamPage({
   channelLayout,
   maxVisibleChannels,
   autoscroll,
-  maxBufferedChunks,
+  chunkHistoryPerChannel,
+  graphWindowSize,
+  graphEnabledChannels,
+  statsEnabledChannels,
   terminalMode,
   downChannel,
   recentCommands,
   recentCommandsCollapsed,
   clearSignal,
 }: Props) {
+  const { width } = useTerminalDimensions();
   const [status, setStatus] = useState<StreamStatus | null>(null);
   const [captureStatus, setCaptureStatus] = useState<CaptureStatus | null>(null);
-  const bufferRef = useRef(new ChunkRingBuffer(maxBufferedChunks));
+  const bufferRef = useRef(new ChannelChunkStore(chunkHistoryPerChannel));
   const [renderSeq, setRenderSeq] = useState(0);
   const sseRef = useRef<{ close: () => void } | null>(null);
   const bytesRef = useRef(0);
   const [throughput, setThroughput] = useState(0);
+  const graphBuffersRef = useRef(new Map<number, NumericRingBuffer>());
+  const statsRef = useRef(new Map<number, RunningStats>());
+  const channelTypesRef = useRef(new Map<number, number>());
+  const previousStatsEnabledRef = useRef(new Set<number>());
+
+  const graphEnabledSet = useMemo(() => new Set(graphEnabledChannels), [graphEnabledChannels.join(",")]);
+  const statsEnabledSet = useMemo(() => new Set(statsEnabledChannels), [statsEnabledChannels.join(",")]);
+  const graphEnabledSetRef = useRef(graphEnabledSet);
+  const statsEnabledSetRef = useRef(statsEnabledSet);
+  const graphWindowSizeRef = useRef(graphWindowSize);
 
   useEffect(() => {
-    bufferRef.current = new ChunkRingBuffer(maxBufferedChunks);
-  }, [maxBufferedChunks]);
+    graphEnabledSetRef.current = graphEnabledSet;
+  }, [graphEnabledSet]);
+
+  useEffect(() => {
+    statsEnabledSetRef.current = statsEnabledSet;
+  }, [statsEnabledSet]);
+
+  useEffect(() => {
+    graphWindowSizeRef.current = graphWindowSize;
+  }, [graphWindowSize]);
+
+  useEffect(() => {
+    bufferRef.current.setCapacity(chunkHistoryPerChannel);
+  }, [chunkHistoryPerChannel]);
 
   useEffect(() => {
     bufferRef.current.clear();
+    graphBuffersRef.current.clear();
+    statsRef.current.clear();
     bytesRef.current = 0;
     rateSamplesRef.current = [];
     setThroughput(0);
     setRenderSeq((s) => s + 1);
   }, [clearSignal]);
+
+  useEffect(() => {
+    for (const channel of [...graphBuffersRef.current.keys()]) {
+      if (!graphEnabledSet.has(channel)) graphBuffersRef.current.delete(channel);
+    }
+  }, [graphEnabledSet]);
+
+  useEffect(() => {
+    const previous = previousStatsEnabledRef.current;
+    for (const channel of [...statsRef.current.keys()]) {
+      if (!statsEnabledSet.has(channel)) statsRef.current.delete(channel);
+    }
+    for (const channel of statsEnabledSet) {
+      if (!previous.has(channel)) statsRef.current.set(channel, new RunningStats());
+    }
+    previousStatsEnabledRef.current = new Set(statsEnabledSet);
+    setRenderSeq((s) => s + 1);
+  }, [statsEnabledSet]);
 
   useEffect(() => {
     let cancelled = false;
@@ -113,6 +214,40 @@ export function StreamPage({
   const renderTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onBatch = useCallback((batch: StreamBatch) => {
     const data = decodeBase64(batch.payload);
+    const type = batch.channelType;
+    const graphSet = graphEnabledSetRef.current;
+    const statsSet = statsEnabledSetRef.current;
+    const previousType = channelTypesRef.current.get(batch.channel);
+    if (type !== undefined && previousType !== undefined && previousType !== type) {
+      graphBuffersRef.current.delete(batch.channel);
+      statsRef.current.delete(batch.channel);
+      if (statsSet.has(batch.channel)) statsRef.current.set(batch.channel, new RunningStats());
+    }
+    if (type !== undefined) channelTypesRef.current.set(batch.channel, type);
+
+    const decoded = decodeNumericSamples(type, data);
+    if (decoded.graphable && decoded.samples.length > 0) {
+      if (graphSet.has(batch.channel)) {
+        const capacity = Math.max(1, graphWindowSizeRef.current);
+        let buffer = graphBuffersRef.current.get(batch.channel);
+        if (!buffer || buffer.capacity !== capacity) {
+          const next = new NumericRingBuffer(capacity);
+          if (buffer) next.pushAll(buffer.toArray());
+          buffer = next;
+          graphBuffersRef.current.set(batch.channel, buffer);
+        }
+        buffer.pushAll(decoded.samples);
+      }
+      if (statsSet.has(batch.channel)) {
+        let stats = statsRef.current.get(batch.channel);
+        if (!stats) {
+          stats = new RunningStats();
+          statsRef.current.set(batch.channel, stats);
+        }
+        stats.pushAll(decoded.samples);
+      }
+    }
+
     const chunk: StreamChunk = {
       seq: batch.seq,
       ts: batch.ts,
@@ -191,11 +326,19 @@ export function StreamPage({
     metrics.push({ label: "capture", value: formatByteCount(captureStatus.bytesWritten), color: theme.warn });
   }
 
+  const statusChannelInfo = status?.channelInfo ?? [];
+  const channelTypeFor = useCallback((channel: number) => {
+    const info = statusChannelInfo.find((item) => item.index === channel);
+    return info?.channelType ?? channelTypesRef.current.get(channel);
+  }, [statusChannelInfo]);
+
   const buildDisplayLines = useCallback((chunks: StreamChunk[], includeChannel: boolean) => {
     const lines: string[] = [];
     for (const chunk of chunks) {
       const ts = formatTimestamp(chunk.ts);
-      const content = formatBytes(chunk.data, displayMode);
+      const type = channelTypeFor(chunk.channel);
+      const numericContent = displayMode === "hex" ? null : formatNumericSamples(type, chunk.data);
+      const content = numericContent ?? formatBytes(chunk.data, displayMode);
       const prefix = includeChannel ? `[ch ${chunk.channel}] ` : "";
       if (displayMode === "line") {
         for (const line of content.split("\n")) {
@@ -213,7 +356,7 @@ export function StreamPage({
       return lines.slice(lines.length - MAX_RENDERED_LINES);
     }
     return lines;
-  }, [displayMode]);
+  }, [channelTypeFor, displayMode]);
 
   const displayLines = useMemo(
     () => buildDisplayLines(visibleChunks, channelLayout === "merge"),
@@ -229,6 +372,76 @@ export function StreamPage({
   }, [allChunks, buildDisplayLines, channelLayout, splitChannels]);
 
   const showRecentPanel = recentCommands.length > 0 && !recentCommandsCollapsed;
+
+  // Focusable pane keys for Tab + [/] resize. Order matches the on-screen layout
+  // left-to-right: split channel panes (or the single stream pane), then Recent.
+  const paneKeys = useMemo(() => {
+    const keys: string[] = [];
+    if (channelLayout === "split") {
+      for (const channel of splitChannels) keys.push(`ch${channel}`);
+    } else {
+      keys.push("stream");
+    }
+    if (showRecentPanel) keys.push("recent");
+    return keys;
+  }, [channelLayout, splitChannels, showRecentPanel]);
+
+  const [focusedPaneIdx, setFocusedPaneIdx] = useState(0);
+  const [paneSizes, setPaneSizes] = useState<Record<string, number>>({});
+
+  // Keep focus index in range when the pane set shrinks/grows.
+  useEffect(() => {
+    setFocusedPaneIdx((idx) => (paneKeys.length === 0 ? 0 : Math.min(idx, paneKeys.length - 1)));
+  }, [paneKeys.length]);
+
+  const PANE_GROW_MIN = 1;
+  const PANE_GROW_MAX = 20;
+  const defaultGrowFor = useCallback((key: string): number => {
+    if (key === "recent") return 3;
+    // The stream/split area collectively gets `7` when Recent is shown so the
+    // ratio reads as ~7/3. Within the split row each pane defaults to 1.
+    if (key === "stream") return showRecentPanel ? 7 : 1;
+    return 1;
+  }, [showRecentPanel]);
+  const growFor = useCallback((key: string): number => paneSizes[key] ?? defaultGrowFor(key), [paneSizes, defaultGrowFor]);
+  const focusedKey = paneKeys[focusedPaneIdx];
+
+  useKeyboard((key) => {
+    if (!active) return;
+    if (paneKeys.length <= 1) return;
+    if (key.ctrl || key.meta || key.option) return;
+    if (isTabKey(key)) {
+      const back = key.shift;
+      setFocusedPaneIdx((idx) => {
+        const n = paneKeys.length;
+        return back ? (idx - 1 + n) % n : (idx + 1) % n;
+      });
+      return;
+    }
+    if (key.sequence === "[" || key.sequence === "]") {
+      const delta = key.sequence === "]" ? 1 : -1;
+      const target = paneKeys[focusedPaneIdx];
+      if (!target) return;
+      setPaneSizes((prev) => {
+        const current = prev[target] ?? defaultGrowFor(target);
+        const next = Math.max(PANE_GROW_MIN, Math.min(PANE_GROW_MAX, current + delta));
+        if (next === current) return prev;
+        return { ...prev, [target]: next };
+      });
+    }
+  });
+
+  const paneCount = channelLayout === "split" ? Math.max(1, splitChannels.length) : 1;
+  // Use the live flexGrow ratio so a resized pane gets a wider graph too.
+  const splitGrowTotal = channelLayout === "split"
+    ? splitChannels.reduce((sum, ch) => sum + growFor(`ch${ch}`), 0) || paneCount
+    : 1;
+  const graphWidthFor = useCallback((key: string): number => {
+    const streamAreaWidth = Math.max(20, width - (showRecentPanel ? 30 : 4));
+    if (channelLayout !== "split") return Math.max(18, streamAreaWidth - 6);
+    const ratio = growFor(key) / splitGrowTotal;
+    return Math.max(18, Math.floor(streamAreaWidth * ratio) - 6);
+  }, [channelLayout, growFor, showRecentPanel, splitGrowTotal, width]);
 
   const renderScrollLines = (lines: string[], focused = active) => (
     lines.length === 0 ? (
@@ -265,6 +478,85 @@ export function StreamPage({
     )
   );
 
+  const renderGraphPane = (channel: number, paneKey: string) => {
+    const type = channelTypeFor(channel);
+    const typeLabel = channelTypeLabel(type);
+    if (!isGraphableChannelType(type)) {
+      return (
+        <box style={{ flexDirection: "column", flexGrow: 1, flexShrink: 1, minHeight: 4, backgroundColor: theme.surfaceHigh, paddingLeft: 1, paddingRight: 1 }}>
+          <text style={{ fg: theme.muted }} content={`graph inactive: ch${channel} is ${typeLabel}`} />
+        </box>
+      );
+    }
+
+    const buffer = graphBuffersRef.current.get(channel);
+    const samples = buffer?.toArray() ?? [];
+    const latest = buffer?.latest;
+    const GRAPH_HEIGHT = 6;
+    const AXIS_WIDTH = 7; // room for `-123.4`
+    const chartWidth = Math.max(12, graphWidthFor(paneKey) - AXIS_WIDTH - 1);
+    const layers = renderAreaGraph(samples, chartWidth, GRAPH_HEIGHT, latest !== undefined ? `last ${formatGraphNumber(latest)}` : undefined);
+    return (
+      <box style={{ flexDirection: "column", flexGrow: 1, flexShrink: 1, minHeight: GRAPH_HEIGHT + 1, backgroundColor: theme.surfaceHigh, paddingLeft: 1, paddingRight: 1 }}>
+        {samples.length === 0 ? (
+          <text style={{ fg: theme.muted }} content={`graph waiting: ch${channel} ${typeLabel}`} />
+        ) : (
+          <>
+            <text style={{ fg: theme.textDim, flexShrink: 0 }} content={`graph ch${channel} ${typeLabel}  n=${samples.length}/${Math.max(1, graphWindowSize)}`} />
+            {layers.head.map((headLine, index) => (
+              <box key={index} style={{ flexDirection: "row", flexShrink: 0 }}>
+                <text style={{ fg: theme.textDim, flexShrink: 0 }} content={(layers.axis[index] ?? "").padStart(AXIS_WIDTH, " ") + " "} />
+                <text style={{ flexShrink: 0 }} content={composeAreaRow(headLine, layers.body[index] ?? "", theme.accent, theme.primary)} />
+              </box>
+            ))}
+          </>
+        )}
+      </box>
+    );
+  };
+
+  const renderStatsPane = (channel: number) => {
+    const type = channelTypeFor(channel);
+    const typeLabel = channelTypeLabel(type);
+    const stats = statsRef.current.get(channel);
+    if (!isGraphableChannelType(type)) {
+      return (
+        <box style={{ flexDirection: "column", flexShrink: 0, height: 2, backgroundColor: theme.surfaceVariant, paddingLeft: 1 }}>
+          <text style={{ fg: theme.muted }} content={`stats inactive: ch${channel} is ${typeLabel}`} />
+        </box>
+      );
+    }
+    if (!stats || stats.count === 0) {
+      return (
+        <box style={{ flexDirection: "column", flexShrink: 0, height: 2, backgroundColor: theme.surfaceVariant, paddingLeft: 1 }}>
+          <text style={{ fg: theme.muted }} content={`stats waiting: ch${channel} ${typeLabel}`} />
+        </box>
+      );
+    }
+    return (
+      <box style={{ flexDirection: "column", flexShrink: 0, height: 2, backgroundColor: theme.surfaceVariant, paddingLeft: 1 }}>
+        <text style={{ fg: theme.secondary }} content={`stats ch${channel} n=${stats.count} mean=${formatGraphNumber(stats.mean)} min=${formatGraphNumber(stats.min)} max=${formatGraphNumber(stats.max)} sd=${formatGraphNumber(stats.stddev)}`} />
+      </box>
+    );
+  };
+
+  const renderChannelPane = (channel: number, title: string, lines: string[], paneKey: string, flexGrow: number) => {
+    const graphEnabled = graphEnabledSet.has(channel);
+    const statsEnabled = statsEnabledSet.has(channel);
+    const focused = active && focusedKey === paneKey;
+    return (
+      <Panel key={channel} title={title} flexGrow={flexGrow}>
+        <box style={{ flexDirection: "column", flexGrow: 1, flexShrink: 1, minHeight: 0 }}>
+          <box style={{ flexDirection: "column", flexGrow: 1, flexShrink: 1, minHeight: 0 }}>
+            {renderScrollLines(lines, focused)}
+          </box>
+          {graphEnabled ? renderGraphPane(channel, paneKey) : null}
+          {statsEnabled ? renderStatsPane(channel) : null}
+        </box>
+      </Panel>
+    );
+  };
+
   const streamTitle = channelLayout === "merge"
     ? `Stream — merged ${knownChannels.map((ch) => `ch${ch}`).join(", ")} [${displayMode}]  ·  ↑/↓ PgUp/PgDn Home/End to scroll`
     : `Stream — ch${selectedChannel} [${displayMode}]  ·  ↑/↓ PgUp/PgDn Home/End to scroll`;
@@ -277,19 +569,22 @@ export function StreamPage({
       <box style={{ flexDirection: "row", flexGrow: 1, flexShrink: 1, minHeight: 0 }}>
         {channelLayout === "split" ? (
           <box style={{ flexDirection: "row", flexGrow: showRecentPanel ? 7 : 1, flexShrink: 1, minHeight: 0 }}>
-            {splitLines.map(({ channel, lines }) => (
-              <Panel key={channel} title={`Stream — ch${channel} [${displayMode}]${splitTitleSuffix}`} flexGrow={1}>
-                {renderScrollLines(lines, active && channel === splitChannels[0])}
-              </Panel>
-            ))}
+            {splitLines.map(({ channel, lines }) => {
+              const paneKey = `ch${channel}`;
+              return renderChannelPane(
+                channel,
+                `Stream — ch${channel} [${displayMode}]${splitTitleSuffix}`,
+                lines,
+                paneKey,
+                growFor(paneKey),
+              );
+            })}
           </box>
         ) : (
-          <Panel title={streamTitle} flexGrow={showRecentPanel ? 7 : 1}>
-            {renderScrollLines(displayLines)}
-          </Panel>
+          renderChannelPane(selectedChannel, streamTitle, displayLines, "stream", growFor("stream"))
         )}
         {showRecentPanel ? (
-          <Panel title="Recent" flexGrow={3} flexShrink={0}>
+          <Panel title="Recent" flexGrow={growFor("recent")} flexShrink={0}>
             <box style={{ flexDirection: "column", overflow: "hidden", padding: 1 }}>
               {recentCommands.slice(-20).map((cmd) => (
                 <text

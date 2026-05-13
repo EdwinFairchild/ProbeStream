@@ -86,6 +86,7 @@ Set the fields that tell the sidecar how to start or connect to OpenOCD:
 | `ramStart` | Start of target RAM to scan, usually `0x20000000` on STM32 |
 | `ramSize` | Number of RAM bytes to scan for the ProbeStream control block |
 | `controlBlockAddr` | Optional fixed control block address if you already know it |
+| `graphWindowSize` | Number of numeric samples retained in each graph window |
 
 Settings page keys:
 
@@ -194,6 +195,17 @@ Change which data you see:
 /mode hex        Hex dump display
 /clear           Clear the stream buffer
 ```
+
+Graph numeric up-channels and track running stats:
+
+```text
+/channel 0 graph-on
+/channel 0 graph-off
+/channel 0 stats-on
+/channel 0 stats-off
+```
+
+Graphing and stats activate only when the channel descriptor is numeric, such as data written with `PS_WriteInt`, `PS_WriteUInt`, `PS_WriteFloat`, `PS_WriteDouble`, or a channel marked as `PS_CHANNEL_TYPE_ASCII_NUMBER`. `/clear` clears graph history and running stats along with the stream buffer. The graph/stat toggles and `graphWindowSize` persist, but collected samples do not.
 
 Send data to the target down-channel:
 

@@ -19,6 +19,7 @@ import { LogPage, type AppLogEntry, type LogKind } from "../pages/LogPage.tsx";
 import { withDefaults, getBool, getString, type SettingsMap } from "../settings.ts";
 import { loadLocalSettings, saveLocalSettings, settingsPath } from "../settingsStorage.ts";
 import { copyToClipboard } from "../clipboard.ts";
+import { formatChannelSet, parseChannelSet } from "../graphing.ts";
 
 type PageId = "splash" | "probes" | "stream" | "settings" | "log";
 
@@ -356,6 +357,13 @@ export function AppFrame({ client, onQuit, initialSidecarLog, subscribeSidecarLo
     setRecentCommandsCollapsed(false);
   }, []);
 
+  const setChannelToggle = useCallback((settingId: "graphChannels" | "statsChannels", channel: number, enabled: boolean) => {
+    const channels = new Set(parseChannelSet(getString(settings, settingId)));
+    if (enabled) channels.add(channel);
+    else channels.delete(channel);
+    updateSettings({ [settingId]: formatChannelSet(channels) });
+  }, [settings, updateSettings]);
+
   const sendDownText = useCallback((channel: number, text: string, source: "send" | "terminal") => {
     const payload = btoa(text + "\n");
     appendLog("command", `${source === "terminal" ? "terminal " : ""}send <${text.length} chars> to ch${channel}`);
@@ -560,6 +568,16 @@ export function AppFrame({ client, onQuit, initialSidecarLog, subscribeSidecarLo
         }
         const n = parseInt(target, 10);
         if (!Number.isFinite(n) || n < 0) { report("usage: /channel <n>|merge|split", "error"); break; }
+        const action = (rest[1] ?? "").toLowerCase();
+        if (action === "graph-on" || action === "graph-off" || action === "stats-on" || action === "stats-off") {
+          const graphAction = action.startsWith("graph");
+          const enabled = action.endsWith("on");
+          setChannelToggle(graphAction ? "graphChannels" : "statsChannels", n, enabled);
+          report(`channel ${n} ${graphAction ? "graph" : "stats"} ${enabled ? "enabled" : "disabled"}${enabled ? " — active when channel type is numeric" : ""}`, "reply");
+          setPage("stream");
+          break;
+        }
+        if (action) { report("usage: /channel <n> [graph-on|graph-off|stats-on|stats-off]", "error"); break; }
         setSelectedChannel(n);
         setChannelLayout("single");
         report(`viewing channel ${n}`, "reply");
@@ -651,7 +669,7 @@ export function AppFrame({ client, onQuit, initialSidecarLog, subscribeSidecarLo
       default:
         report(`unknown command: /${head}`, "error");
     }
-  }, [appendLog, clearLog, clearStream, client, downChannel, logEntries, onQuit, openocdOptions, page, quickStartStreaming, refreshHealth, refreshProbes, rememberCommand, report, reportError, scanProbeStream, selectedChannel, sendDownText, settings, updateSettings]);
+  }, [appendLog, clearLog, clearStream, client, downChannel, logEntries, onQuit, openocdOptions, page, quickStartStreaming, refreshHealth, refreshProbes, rememberCommand, report, reportError, scanProbeStream, selectedChannel, sendDownText, setChannelToggle, settings, updateSettings]);
 
   const onSubmit = useCallback((line: string) => {
     const trimmed = line.trim();
@@ -664,10 +682,10 @@ export function AppFrame({ client, onQuit, initialSidecarLog, subscribeSidecarLo
       runCommand(trimmed);
       return;
     }
-    if (terminalMode) {
+    if (terminalMode && page === "stream") {
       sendDownText(downChannel, trimmed, "terminal");
     }
-  }, [downChannel, runCommand, sendDownText, terminalMode]);
+  }, [downChannel, page, runCommand, sendDownText, terminalMode]);
 
   // Global keyboard handler
   useKeyboard((key) => {
@@ -745,7 +763,7 @@ export function AppFrame({ client, onQuit, initialSidecarLog, subscribeSidecarLo
         <text style={{ fg: theme.muted }} content="│ sidecar " />
         <text style={{ fg: theme.textDim }} content={client.baseUrl} />
         <text style={{ fg: health ? theme.ok : theme.muted }} content={health ? "  ●" : "  ?"} />
-        <text style={{ fg: theme.muted, flexGrow: 1 }} content={`  │ ${page}${terminalMode ? `  TERMINAL ch${downChannel}` : ""}`} />
+        <text style={{ fg: theme.muted, flexGrow: 1 }} content={`  │ ${page}${terminalMode && page === "stream" ? `  TERMINAL ch${downChannel}` : terminalMode ? `  (terminal ch${downChannel} suspended)` : ""}`} />
         {health?.openocd_connected ? (
           <text style={{ fg: theme.ok }} content="OCD " />
         ) : (
@@ -804,7 +822,10 @@ export function AppFrame({ client, onQuit, initialSidecarLog, subscribeSidecarLo
             channelLayout={channelLayout}
             maxVisibleChannels={parseInt(getString(settings, "maxStreamSplits"), 10) || 2}
             autoscroll={getBool(settings, "autoscroll")}
-            maxBufferedChunks={parseInt(getString(settings, "maxBufferedChunks"), 10) || 1024}
+            chunkHistoryPerChannel={parseInt(getString(settings, "chunkHistoryPerChannel"), 10) || 500}
+            graphWindowSize={parseInt(getString(settings, "graphWindowSize"), 10) || 256}
+            graphEnabledChannels={parseChannelSet(getString(settings, "graphChannels"))}
+            statsEnabledChannels={parseChannelSet(getString(settings, "statsChannels"))}
             terminalMode={terminalMode}
             downChannel={downChannel}
             recentCommands={recentCommands}
@@ -853,10 +874,10 @@ export function AppFrame({ client, onQuit, initialSidecarLog, subscribeSidecarLo
         slashCommands={SLASH_COMMANDS}
         onCompleterActive={setCompleterActive}
         onBufferChange={setPromptEmpty}
-        allowFreeInput={terminalMode}
+        allowFreeInput={terminalMode && page === "stream"}
         hint={
           flash ??
-          (terminalMode
+          (terminalMode && page === "stream"
             ? "type to send, / for commands, /terminal exit to leave"
             : "press / for commands — ? for help")
         }

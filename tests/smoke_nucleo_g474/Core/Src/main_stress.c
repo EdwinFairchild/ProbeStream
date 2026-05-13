@@ -17,6 +17,7 @@ void SystemClock_Config(void);
  *   5 = realistic periodic: one structured log line every ~10 ms
  *       (sensor-style telemetry, ~50 B/line ~ 5 KB/s — what real firmware emits)
  *   6 = multi-channel: ch0 command/log traffic, ch1 telemetry traffic
+ *   7 = graph demo: ch0 logs, ch1 float32 waveform, ch2 int32 ramp
  *
  * Buffer size controlled by compile-time PS_STRESS_BUFSZ (default 16384).
  * Down-channel commands:
@@ -30,7 +31,7 @@ void SystemClock_Config(void);
 #define PS_STRESS_BUFSZ 16384
 #endif
 
-#define PS_STRESS_UP_CHANNELS   2
+#define PS_STRESS_UP_CHANNELS   3
 #define PS_STRESS_DOWN_CHANNELS 2
 
 static uint8_t ps_buffer[PS_STRESS_BUFSZ] __attribute__((aligned(4)));
@@ -50,6 +51,9 @@ static void init_probestream(uint32_t bufsz)
         .defaultMode    = PS_MODE_TRIM,
     };
     PS_Init(&ps_cfg);
+    PS_SetChannelType(0, PS_CHANNEL_TYPE_TEXT);
+    PS_SetChannelType(1, PS_CHANNEL_TYPE_FLOAT32);
+    PS_SetChannelType(2, PS_CHANNEL_TYPE_INT32);
     seq_counter = 0;
     bytes_written = 0;
     drops = 0;
@@ -61,7 +65,7 @@ static void process_command(uint8_t channel, char *cmd)
 
     if (strncmp(cmd, "mode ", 5) == 0) {
         uint32_t m = cmd[5] - '0';
-        if (m <= 6) {
+        if (m <= 7) {
             test_mode = m;
             seq_counter = 0;
             bytes_written = 0;
@@ -226,6 +230,23 @@ int main(void)
                                    seq_counter, now, (seq_counter * 37) % 1000);
                 if (n0 > 0) bytes_written += (uint32_t)n0; else drops++;
                 if (n1 > 0) bytes_written += (uint32_t)n1; else drops++;
+                seq_counter++;
+            }
+            break;
+        }
+        case 7: {
+            static uint32_t last_tick = 0;
+            uint32_t now = HAL_GetTick();
+            if ((now - last_tick) >= 25) {
+                last_tick = now;
+                int n0 = PS_Printf(0, "[m7 graph] seq=%lu tick=%lu ch1=float32 ch2=int32\n", seq_counter, now);
+                float wave = 25.0f + (float)(seq_counter % 100u) * 0.05f;
+                int32_t ramp = (int32_t)(seq_counter % 120u) - 60;
+                uint32_t w1 = PS_WriteFloat(1, wave);
+                uint32_t w2 = PS_WriteInt(2, ramp);
+                if (n0 > 0) bytes_written += (uint32_t)n0; else drops++;
+                if (w1 == sizeof(float)) bytes_written += w1; else drops++;
+                if (w2 == sizeof(int32_t)) bytes_written += w2; else drops++;
                 seq_counter++;
             }
             break;

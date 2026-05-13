@@ -83,6 +83,7 @@ bool ProbeStreamReader::refreshChannel(ChannelState& ch)
 {
     ch.wrOff = readU32(ch.descAddr + CH_OFF_WROFF);
     ch.rdOff = readU32(ch.descAddr + CH_OFF_RDOFF);
+    ch.flags = readU32(ch.descAddr + CH_OFF_FLAGS);
     return true;
 }
 
@@ -94,6 +95,7 @@ uint32_t ProbeStreamReader::pollUp(const DataCallback& cb)
         auto& ch = upChannels_[i];
         uint32_t wrOff = readU32(ch.descAddr + CH_OFF_WROFF);
         uint32_t rdOff = readU32(ch.descAddr + CH_OFF_RDOFF);
+        ch.flags = readU32(ch.descAddr + CH_OFF_FLAGS);
 
         if (wrOff == rdOff)
             continue;

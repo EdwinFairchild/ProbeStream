@@ -9,6 +9,7 @@ Target-side C API. For a high-level overview and measured performance, see the t
 - [Configuration macros](#configuration-macros)
 - [Initialization](#initialization)
 - [Writing to a channel](#writing-to-a-channel-target--host)
+- [Typed numeric channels](#typed-numeric-channels)
 - [Reading from a channel](#reading-from-a-channel-host--target)
 - [Modes](#modes)
 - [Compile-out kill switch](#compile-out-kill-switch)
@@ -56,12 +57,45 @@ Constraints:
 ```c
 uint32_t PS_Write(uint8_t channel, const void* data, uint32_t numBytes);
 uint32_t PS_WriteString(uint8_t channel, const char* str);
+uint32_t PS_WriteInt(uint8_t channel, int32_t value);
+uint32_t PS_WriteUInt(uint8_t channel, uint32_t value);
+uint32_t PS_WriteFloat(uint8_t channel, float value);
+uint32_t PS_WriteDouble(uint8_t channel, double value);
 int      PS_Printf(uint8_t channel, const char* fmt, ...);   // if PS_ENABLE_PRINTF
 ```
 
 - Returns the number of bytes actually committed to the ring (may be 0 or less than requested depending on mode and free space).
-- All three are interrupt-safe **on the writer side as long as only one context writes a given channel at a time**. Concurrent writers to the same channel need external locking. The host (reader) side is always safe regardless.
+- These calls are interrupt-safe **on the writer side as long as only one context writes a given channel at a time**. Concurrent writers to the same channel need external locking. The host (reader) side is always safe regardless.
 - `PS_Printf` uses an internal stack buffer of `PS_PRINTF_BUFFER_SIZE`. Output is truncated to fit.
+
+### Typed numeric channels
+
+```c
+void PS_SetChannelType(uint8_t channel, uint8_t type);
+```
+
+Channel type lives in the channel descriptor and tells host tools how to interpret a channel. The type applies to the whole channel, so do not mix text logs and numeric samples on the same channel if you want graphing or stats.
+
+| Type | Constant | Payload format |
+|---|---|---|
+| Raw bytes | `PS_CHANNEL_TYPE_RAW` | Untyped bytes; not graphable. |
+| Text | `PS_CHANNEL_TYPE_TEXT` | Human-readable text; not graphable. |
+| ASCII number | `PS_CHANNEL_TYPE_ASCII_NUMBER` | Strict numeric ASCII tokens such as `12`, `12.4`, `-0.23`. |
+| Signed 32-bit | `PS_CHANNEL_TYPE_INT32` | Little-endian `int32_t` samples. |
+| Unsigned 32-bit | `PS_CHANNEL_TYPE_UINT32` | Little-endian `uint32_t` samples. |
+| 32-bit float | `PS_CHANNEL_TYPE_FLOAT32` | Little-endian `float` samples. |
+| 64-bit float | `PS_CHANNEL_TYPE_FLOAT64` | Little-endian `double` samples. |
+
+`PS_WriteInt`, `PS_WriteUInt`, `PS_WriteFloat`, and `PS_WriteDouble` mark the up-channel with the matching type before writing the sample. Use `PS_SetChannelType(channel, PS_CHANNEL_TYPE_ASCII_NUMBER)` when you want to emit numeric ASCII with `PS_WriteString` or `PS_Printf`.
+
+```c
+PS_WriteFloat(0, temperature_c);
+
+PS_SetChannelType(1, PS_CHANNEL_TYPE_ASCII_NUMBER);
+PS_Printf(1, "%.3f\n", current_ma);
+```
+
+`PS_SetMode` preserves channel type bits, and `PS_SetChannelType` preserves the current full-buffer mode.
 
 ### Reading from a channel (host → target)
 

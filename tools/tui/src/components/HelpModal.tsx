@@ -41,6 +41,8 @@ const HELP_LINES = [
   "  /send <text>   Send text to down-channel",
   "  /send-hex <h>  Send hex bytes",
   "  /channel <n>   Select one up-channel",
+  "  /channel <n> graph-on|graph-off",
+  "  /channel <n> stats-on|stats-off",
   "  /channel merge Show all up-channels with prefixes",
   "  /channel split Split visible up-channels into panes",
   "  /recent hide|show|clear",

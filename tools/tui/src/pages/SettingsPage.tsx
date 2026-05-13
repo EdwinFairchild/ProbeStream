@@ -61,6 +61,19 @@ export function SettingsPage({ active, settings, onChange, onEditingChange }: Pr
     onChange({ [def.id]: nextSettingValue(def, settings[def.id]) });
   }, [def, onChange, settings]);
 
+  const activateSetting = useCallback((preferEdit: boolean) => {
+    if (!def) return;
+    if (preferEdit && canOpenValueEditor(def)) {
+      enterDetail();
+      return;
+    }
+    if (canCycleValue(def)) {
+      cycleValue();
+      return;
+    }
+    if (canOpenValueEditor(def)) enterDetail();
+  }, [cycleValue, def, enterDetail]);
+
   const commitEdit = useCallback(() => {
     if (!def) return;
     let value: unknown = editBuffer;
@@ -191,13 +204,17 @@ export function SettingsPage({ active, settings, onChange, onEditingChange }: Pr
       return;
     }
     if (key.sequence === " ") {
-      if (def && canCycleValue(def)) cycleValue();
-      else enterDetail();
+      activateSetting(false);
       key.preventDefault(); key.stopPropagation();
       return;
     }
-    if (key.name === "tab" || key.name === "return") {
-      enterDetail();
+    if (key.name === "return") {
+      activateSetting(true);
+      key.preventDefault(); key.stopPropagation();
+      return;
+    }
+    if (key.name === "tab") {
+      activateSetting(true);
       key.preventDefault(); key.stopPropagation();
       return;
     }
@@ -309,10 +326,12 @@ export function SettingsPage({ active, settings, onChange, onEditingChange }: Pr
                   ? "type or ↑/↓ cycle  ·  Enter save  ·  Esc cancel  ·  Ctrl+U clear"
                   : "type to edit  ·  Enter save  ·  Esc cancel  ·  Ctrl+U clear"
                 : def.type === "bool"
-                  ? "Space to toggle"
-                  : canCycleValue(def)
-                    ? "Space to cycle value"
-                    : "Tab/Enter/Space to edit value"
+                  ? "Space/Enter to toggle"
+                  : def.type === "select"
+                    ? canOpenValueEditor(def)
+                      ? "Space cycles presets  ·  Enter edits custom value"
+                      : "Space/Enter to cycle value"
+                    : "Enter/Space to edit value"
             } />
           </box>
         ) : null}

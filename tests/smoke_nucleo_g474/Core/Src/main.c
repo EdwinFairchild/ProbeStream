@@ -17,11 +17,14 @@ int main(void)
     PS_Config_t ps_cfg = {
         .pBuffer        = ps_buffer,
         .bufferSize     = sizeof(ps_buffer),
-        .numUpChannels  = 1,
+        .numUpChannels  = 3,
         .numDownChannels = 1,
         .defaultMode    = PS_MODE_TRIM,
     };
     PS_Init(&ps_cfg);
+    PS_SetChannelType(0, PS_CHANNEL_TYPE_TEXT);
+    PS_SetChannelType(1, PS_CHANNEL_TYPE_FLOAT32);
+    PS_SetChannelType(2, PS_CHANNEL_TYPE_INT32);
 
     uint32_t counter = 0;
     uint32_t delay_ms = 500;
@@ -51,6 +54,8 @@ int main(void)
         }
 
         PS_Printf(0, "smoke %lu d=%lu\n", counter, delay_ms);
+        PS_WriteFloat(1, 20.0f + (float)(counter % 100u) * 0.1f);
+        PS_WriteInt(2, (int32_t)(counter % 80u) - 40);
         counter++;
         BSP_LED_Toggle(LED_GREEN);
         HAL_Delay(delay_ms);

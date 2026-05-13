@@ -23,6 +23,17 @@ struct ChannelState {
     uint32_t rdOff   = 0;
     uint32_t flags   = 0;
     uint32_t descAddr = 0;  // address of channel descriptor on target
+
+    uint8_t mode() const { return static_cast<uint8_t>(flags & MODE_MASK); }
+    uint8_t type() const { return static_cast<uint8_t>((flags >> CHANNEL_TYPE_SHIFT) & CHANNEL_TYPE_MASK); }
+    bool isGraphable() const {
+        const uint8_t t = type();
+        return t == static_cast<uint8_t>(ChannelType::AsciiNumber) ||
+               t == static_cast<uint8_t>(ChannelType::Int32) ||
+               t == static_cast<uint8_t>(ChannelType::UInt32) ||
+               t == static_cast<uint8_t>(ChannelType::Float32) ||
+               t == static_cast<uint8_t>(ChannelType::Float64);
+    }
 };
 
 using DataCallback = std::function<void(uint8_t channel, const uint8_t* data, uint32_t len)>;
