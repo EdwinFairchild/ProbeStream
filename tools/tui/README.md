@@ -21,25 +21,27 @@ Terminal UI for real-time debug streaming over OpenOCD using the ProbeStream pro
 
 ## Install from Source
 
-### 1. Install Bun
+### 1. Install dependencies
 
-**macOS / Linux:**
-```bash
-curl -fsSL https://bun.sh/install | bash
-```
-
-**Windows (PowerShell):**
-```powershell
-powershell -ExecutionPolicy Bypass -c "irm bun.sh/install.ps1 | iex"
-```
-
-Restart your terminal after installing so `bun` is on your PATH.  
-Installs to `~/.bun/bin/bun` (Unix) or `%USERPROFILE%\.bun\bin\bun.exe` (Windows).
-
-### 2. Clone and install dependencies
+After cloning the repository, run the cross-platform installer from the repository root:
 
 ```bash
 git clone <repo-url>
+cd <repo>
+python3 tools/tui/scripts/install-deps.py
+```
+
+On Windows, use `py` or `python` if `python3` is not available:
+
+```powershell
+py tools\tui\scripts\install-deps.py
+```
+
+The installer checks for Bun, installs it if missing, repairs the Bun PATH entry for future terminals, and runs `bun install`.
+
+### 2. Install manually if preferred
+
+```bash
 cd <repo>/tools/tui
 
 bun install
