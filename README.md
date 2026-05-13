@@ -1,5 +1,7 @@
 # ProbeStream
 
+![ProbeStream demo](PS.gif)
+
 ProbeStream is a clean-room, RTT-style bidirectional transport between a microcontroller and a host PC over the existing SWD/JTAG debug link. The MCU writes log/telemetry data into a ring buffer in its own RAM; the host reads the buffer through the debugger without ever halting the CPU. The host can also write to a second ring buffer to deliver commands back to the firmware.
 
 If you've used SEGGER RTT, this is the same idea : a free, header-only-ish C library on the target plus a small C++/Python reader on the host. It works with any debug probe that can do non-intrusive memory reads (ST-Link, J-Link, CMSIS-DAP, ULINK, …) via OpenOCD or pyOCD.

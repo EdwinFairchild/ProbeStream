@@ -4,17 +4,35 @@ Terminal UI for real-time debug streaming over OpenOCD using the ProbeStream pro
 
 ## Prerequisites
 
-- **Bun** ≥ 1.3 — [install](https://bun.sh): `curl -fsSL https://bun.sh/install | bash`
-- **Python** ≥ 3.10 (no pip packages required — stdlib only)
-- **OpenOCD** — STM32CubeIDE ships one, or use your distro's package
+- **Bun** ≥ 1.3 — runtime and package manager (replaces Node/npm)
+- **Python** ≥ 3.10 — stdlib only, no pip packages required
+- **OpenOCD** — STM32CubeIDE ships one, or install separately
 - **A terminal** with kitty keyboard protocol support recommended (kitty, WezTerm, ghostty, Alacritty ≥ 0.14). Falls back gracefully on others.
-also need xclip installed
-## Install
+- **xclip** (Linux only) — for clipboard support
+
+## Install from Source
+
+### 1. Install Bun
+
+**macOS / Linux:**
+```bash
+curl -fsSL https://bun.sh/install | bash
+```
+
+**Windows (PowerShell):**
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm bun.sh/install.ps1 | iex"
+```
+
+Restart your terminal after installing so `bun` is on your PATH.  
+Installs to `~/.bun/bin/bun` (Unix) or `%USERPROFILE%\.bun\bin\bun.exe` (Windows).
+
+### 2. Clone and install dependencies
 
 ```bash
-cd tools/tui
+git clone <repo-url>
+cd <repo>/tools/tui
 
-# Install Node/Bun dependencies
 bun install
 ```
 

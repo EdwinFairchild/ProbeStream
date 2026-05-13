@@ -869,7 +869,9 @@ def main():
         threading.Thread(target=server.shutdown, daemon=True).start()
 
     signal.signal(signal.SIGTERM, _shutdown)
-    signal.signal(signal.SIGHUP, _shutdown)
+    # SIGHUP does not exist on Windows.
+    if hasattr(signal, "SIGHUP"):
+        signal.signal(signal.SIGHUP, _shutdown)
 
     try:
         server.serve_forever()
