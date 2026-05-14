@@ -11,7 +11,7 @@ OPENOCD_SCRIPTS = "/media/eddie/Engineering/Projects/ViewAlyzer_Root/external/Op
 G4_STLINK_SN = "0033004B3033510735393935"
 
 TCL_PORT = 6666
-MAGIC = b"ProbeStreamV1\x00\x00\x00"
+MAGIC = b"ProbeStream\x00\x00\x00\x00\x00"
 RAM_START = 0x20000000
 RAM_SIZE = 128 * 1024  # G474 has 128KB RAM
 

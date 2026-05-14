@@ -21,7 +21,7 @@ All multi-byte fields are little-endian, which on every supported Cortex-M targe
 
 | Offset | Size | Name | Meaning |
 |---|---|---|---|
-| 0  | 16 | `magic`   | `"ProbeStreamV1\0\0\0"`. Written backwards at init. |
+| 0  | 16 | `magic`   | `"ProbeStream\0\0\0\0\0"`. Written backwards at init. |
 | 16 | 4  | `numUp`   | Number of active up-channels (`1..maxUp`). |
 | 20 | 4  | `numDown` | Number of active down-channels (`0..maxDown`). |
 | 24 | 4  | `maxUp`   | Compile-time `PS_MAX_UP_CHANNELS`. |

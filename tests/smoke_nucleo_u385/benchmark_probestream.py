@@ -21,7 +21,7 @@ ELF_PATH = os.path.join(SCRIPT_DIR, "build_stress/PS_Smoke.elf")
 HEX_PATH = os.path.join(SCRIPT_DIR, "build_stress/PS_Smoke.hex")
 
 TCL_PORT = 6666
-MAGIC = b"ProbeStreamV1\x00\x00\x00"
+MAGIC = b"ProbeStream\x00\x00\x00\x00\x00"
 RAM_START = 0x20000000
 RAM_SIZE = 192 * 1024
 

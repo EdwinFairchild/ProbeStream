@@ -6,7 +6,7 @@
 
 namespace ProbeStream {
 
-static constexpr char MAGIC[16] = {'P','r','o','b','e','S','t','r','e','a','m','V','1','\0','\0','\0'};
+static constexpr char MAGIC[16] = {'P','r','o','b','e','S','t','r','e','a','m','\0','\0','\0','\0','\0'};
 static constexpr uint32_t MAGIC_LEN = 16;
 
 // Control block header offsets (all uint32_t except magic)

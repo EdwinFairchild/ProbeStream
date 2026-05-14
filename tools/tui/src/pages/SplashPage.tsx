@@ -4,6 +4,11 @@ import { theme } from "../theme.ts";
 import { Panel } from "../components/Panel.tsx";
 import { StatusPill } from "../components/StatusPill.tsx";
 import type { DebugProbeInfo, HealthResponse, ProbeDiscoveryResult } from "../bridge/types.ts";
+import pkg from "../../package.json" with { type: "json" };
+
+// Title tail (right of the animated box) is fixed-width so the rows below stay aligned.
+const TITLE_TAIL_WIDTH = 24;
+const TITLE_TAIL = ("  P R O B E  [ v" + pkg.version + " ]").padEnd(TITLE_TAIL_WIDTH, " ");
 
 interface Props {
   health: HealthResponse | null;
@@ -56,7 +61,7 @@ export function SplashPage({ health, active, probes, probeDiscovery, probeScanBu
 
         {/* Row 0: static border + static title */}
         <box style={{ flexDirection: "row", height: 1, flexShrink: 0 }}>
-          <text style={{ fg: theme.textDim }} content={"  " + BORDER_TOP + "  P R O B E  [ v1.0 ]   "} />
+          <text style={{ fg: theme.textDim }} content={"  " + BORDER_TOP + TITLE_TAIL} />
         </box>
 
         {/* Row 1: │ + animated fills + │ + static right text */}

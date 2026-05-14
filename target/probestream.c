@@ -9,7 +9,7 @@
 #endif
 
 /* Written backwards during init to prevent a partial copy from matching a scan. */
-static const char ps_magic[16] = "ProbeStreamV1\0\0\0";
+static const char ps_magic[16] = "ProbeStream\0\0\0\0\0";
 
 static PS_ControlBlock_t* s_cb;
 

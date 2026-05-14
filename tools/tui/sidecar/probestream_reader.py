@@ -12,7 +12,7 @@ try:
 except ImportError:
     from openocd_tcl import OpenOcdTcl
 
-MAGIC = b"ProbeStreamV1\x00\x00\x00"
+MAGIC = b"ProbeStream\x00\x00\x00\x00\x00"
 MAGIC_LEN = 16
 
 OFF_MAGIC = 0
