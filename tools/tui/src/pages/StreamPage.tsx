@@ -51,12 +51,8 @@ interface Props {
 export type StreamChannelLayout = "single" | "merge" | "split";
 
 /**
- * Build a single styled row from the head + body + grid layers of an area
- * chart. Head cells (the curve outline) get the bright colour; body cells
- * (the filled area below the curve) get the dim colour; grid cells (faint
- * horizontal rules in empty space above the curve) get the muted colour.
- * Spaces stay uncoloured. Consecutive cells of the same kind are merged into
- * one chunk to keep the chunk count small.
+ * Build a styled row from the head/body/grid layers, merging adjacent cells
+ * of the same kind into a single colored chunk.
  */
 function composeAreaRow(head: string, body: string, grid: string, headColor: string, bodyColor: string, gridColor: string): StyledText {
   const len = Math.max(head.length, body.length, grid.length);
@@ -441,7 +437,7 @@ export function StreamPage({
     // why `[` / `]` weren't producing pane resizes.
     const dbg = (globalThis as unknown as { __probestreamDebug?: (m: string, d?: unknown) => void }).__probestreamDebug;
     if (dbg) {
-      const k = key as Record<string, unknown>;
+      const k = key as unknown as Record<string, unknown>;
       dbg(`stream key`, {
         active,
         paneCount: paneKeys.length,
