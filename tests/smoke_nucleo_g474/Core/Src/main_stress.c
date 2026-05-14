@@ -1,6 +1,7 @@
 #include "main.h"
 #include "gpio.h"
 #include "probestream.h"
+#include <math.h>
 #include <string.h>
 
 void SystemClock_Config(void);
@@ -239,8 +240,12 @@ int main(void)
             uint32_t now = HAL_GetTick();
             if ((now - last_tick) >= 25) {
                 last_tick = now;
-                int n0 = PS_Printf(0, "[m7 graph] seq=%lu tick=%lu ch1=float32 ch2=int32\n", seq_counter, now);
-                float wave = 25.0f + (float)(seq_counter % 100u) * 0.05f;
+                int n0 = PS_Printf(0, "[m7 graph] seq=%lu tick=%lu ch1=float32(sine) ch2=int32\n", seq_counter, now);
+                /* Sine wave: 1 Hz at the 25 ms tick rate (40 samples/cycle),
+                 * amplitude 5.0 around 25.0. */
+                const float two_pi = 6.28318530717958647692f;
+                float phase = two_pi * (float)(seq_counter % 40u) / 40.0f;
+                float wave = 25.0f + 5.0f * sinf(phase);
                 int32_t ramp = (int32_t)(seq_counter % 120u) - 60;
                 uint32_t w1 = PS_WriteFloat(1, wave);
                 uint32_t w2 = PS_WriteInt(2, ramp);
