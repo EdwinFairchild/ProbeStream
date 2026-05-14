@@ -5,12 +5,17 @@ interface Props {
   title?: string;
   flexGrow?: number;
   flexShrink?: number;
+  /** When true, draw the border in the accent colour to mark this pane as the
+   *  active resize / scroll target. */
+  focused?: boolean;
   children: React.ReactNode;
 }
 
-export function Panel({ title, flexGrow = 1, flexShrink = 1, children }: Props) {
+export function Panel({ title, flexGrow = 1, flexShrink = 1, focused = false, children }: Props) {
   return (
     <box
+      flexGrow={flexGrow}
+      flexShrink={flexShrink}
       style={{
         flexDirection: "column",
         flexGrow,
@@ -18,8 +23,8 @@ export function Panel({ title, flexGrow = 1, flexShrink = 1, children }: Props) 
         minWidth: 0,
         minHeight: 0,
         border: true,
-        borderStyle: "single",
-        borderColor: theme.border,
+        borderStyle: focused ? "double" : "single",
+        borderColor: focused ? theme.accent : theme.border,
         backgroundColor: theme.surface,
       }}
     >
@@ -28,13 +33,13 @@ export function Panel({ title, flexGrow = 1, flexShrink = 1, children }: Props) 
           style={{
             flexDirection: "row",
             flexShrink: 0,
-            backgroundColor: theme.surfaceVariant,
+            backgroundColor: focused ? theme.accent : theme.surfaceVariant,
             paddingLeft: 1,
             paddingRight: 1,
             height: 1,
           }}
         >
-          <text style={{ fg: theme.accent }} content={title} />
+          <text style={{ fg: focused ? theme.surface : theme.accent }} content={title} />
         </box>
       ) : null}
       <box style={{ flexDirection: "column", flexGrow: 1, flexShrink: 1, minHeight: 0, overflow: "hidden" }}>

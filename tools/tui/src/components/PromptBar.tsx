@@ -196,6 +196,10 @@ export function PromptBar({
 
     if (!inputActive) {
       if (isSlashKey(key)) return;
+      // Reserve `[` and `]` for the page's pane-resize shortcut even when
+      // terminal-mode free-input is enabled — otherwise pressing them would
+      // pop open the prompt and eat the keystroke.
+      if (key.sequence === "[" || key.sequence === "]" || key.name === "[" || key.name === "]") return;
       if (allowFreeInput && key.sequence && key.sequence.length === 1 && !key.ctrl && !key.meta) {
         onInputActiveChange?.(true);
         if (insertText(key.sequence)) {

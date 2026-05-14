@@ -97,6 +97,16 @@ export interface CommandHistoryEntry {
   kind: "text" | "hex";
 }
 
+/**
+ * Hard cap on the number of `<text>` rows rendered per pane. The chunk store
+ * keeps the user-configured history (chunkHistoryPerChannel) so capture +
+ * scrollback context still cover that range, but rendering 500+ yoga-laid-out
+ * children per pane stalls the UI once the rings fill. Empirically ~200 rows
+ * keeps a generous scrollback while staying responsive at 30 Hz with three
+ * panes at high message rates.
+ */
+const MAX_RENDERED_LINES = 200;
+
 export function StreamPage({
   client,
   active,
@@ -276,16 +286,20 @@ export function StreamPage({
 
   const allChunks = useMemo(() => {
     void renderSeq;
-    return bufferRef.current.toArray();
+    // Merge view is only used for the merged display mode. Cap the merged
+    // tail so we don't sort a 1500-element array every render once the
+    // per-channel rings are full.
+    return bufferRef.current.toArray(MAX_RENDERED_LINES);
   }, [renderSeq]);
 
   const knownChannels = useMemo(() => {
+    void renderSeq;
     const seen = new Set<number>();
     for (const channel of status?.channels ?? []) seen.add(channel);
-    for (const chunk of allChunks) seen.add(chunk.channel);
+    for (const channel of bufferRef.current.channels()) seen.add(channel);
     if (seen.size === 0) seen.add(selectedChannel);
     return [...seen].sort((a, b) => a - b);
-  }, [allChunks, selectedChannel, status?.channels]);
+  }, [renderSeq, selectedChannel, status?.channels]);
 
   const splitChannels = useMemo(() => {
     const limit = Math.max(1, maxVisibleChannels);
@@ -297,11 +311,14 @@ export function StreamPage({
   const visibleChunks = useMemo(() => {
     if (channelLayout === "merge") return allChunks;
     if (channelLayout === "split") {
-      const visible = new Set(splitChannels);
-      return allChunks.filter((chunk) => visible.has(chunk.channel));
+      // Split mode renders each pane independently from byChannel(); this
+      // merged-visible array isn't used for layout there. Return empty to
+      // skip the work.
+      return [];
     }
-    return allChunks.filter((chunk) => chunk.channel === selectedChannel);
-  }, [allChunks, channelLayout, selectedChannel, splitChannels]);
+    void renderSeq;
+    return bufferRef.current.byChannel(selectedChannel, MAX_RENDERED_LINES);
+  }, [allChunks, channelLayout, renderSeq, selectedChannel]);
 
   const metrics: Metric[] = [
     { label: "status", value: status?.active ? "streaming" : "stopped", color: status?.active ? theme.ok : theme.muted },
@@ -333,8 +350,15 @@ export function StreamPage({
   }, [statusChannelInfo]);
 
   const buildDisplayLines = useCallback((chunks: StreamChunk[], includeChannel: boolean) => {
+    // Slice chunks first: most modes emit one line per chunk, so trimming the
+    // input below the render cap means we don't format chunks we'll throw
+    // away. `line` mode can yield multiple lines per chunk, so we still apply
+    // a final tail-slice below as a safety net.
+    const sliced = chunks.length > MAX_RENDERED_LINES
+      ? chunks.slice(chunks.length - MAX_RENDERED_LINES)
+      : chunks;
     const lines: string[] = [];
-    for (const chunk of chunks) {
+    for (const chunk of sliced) {
       const ts = formatTimestamp(chunk.ts);
       const type = channelTypeFor(chunk.channel);
       const numericContent = displayMode === "hex" ? null : formatNumericSamples(type, chunk.data);
@@ -351,7 +375,6 @@ export function StreamPage({
         lines.push(`${ts}  ${prefix}${content}`);
       }
     }
-    const MAX_RENDERED_LINES = 500;
     if (lines.length > MAX_RENDERED_LINES) {
       return lines.slice(lines.length - MAX_RENDERED_LINES);
     }
@@ -365,11 +388,12 @@ export function StreamPage({
 
   const splitLines = useMemo(() => {
     if (channelLayout !== "split") return [];
+    void renderSeq;
     return splitChannels.map((channel) => ({
       channel,
-      lines: buildDisplayLines(allChunks.filter((chunk) => chunk.channel === channel), false),
+      lines: buildDisplayLines(bufferRef.current.byChannel(channel, MAX_RENDERED_LINES), false),
     }));
-  }, [allChunks, buildDisplayLines, channelLayout, splitChannels]);
+  }, [buildDisplayLines, channelLayout, renderSeq, splitChannels]);
 
   const showRecentPanel = recentCommands.length > 0 && !recentCommandsCollapsed;
 
@@ -407,6 +431,20 @@ export function StreamPage({
   const focusedKey = paneKeys[focusedPaneIdx];
 
   useKeyboard((key) => {
+    // TEMP DEBUG: log every key seen on the Stream page so we can diagnose
+    // why `[` / `]` weren't producing pane resizes.
+    const dbg = (globalThis as unknown as { __probestreamDebug?: (m: string, d?: unknown) => void }).__probestreamDebug;
+    if (dbg) {
+      const k = key as Record<string, unknown>;
+      dbg(`stream key`, {
+        active,
+        paneCount: paneKeys.length,
+        focused: paneKeys[focusedPaneIdx],
+        name: k.name, sequence: k.sequence, raw: k.raw,
+        ctrl: k.ctrl, shift: k.shift, meta: k.meta, option: k.option,
+        eventType: k.eventType,
+      });
+    }
     if (!active) return;
     if (paneKeys.length <= 1) return;
     if (key.ctrl || key.meta || key.option) return;
@@ -416,10 +454,19 @@ export function StreamPage({
         const n = paneKeys.length;
         return back ? (idx - 1 + n) % n : (idx + 1) % n;
       });
+      (key as { preventDefault?: () => void; stopPropagation?: () => void }).preventDefault?.();
+      (key as { preventDefault?: () => void; stopPropagation?: () => void }).stopPropagation?.();
       return;
     }
-    if (key.sequence === "[" || key.sequence === "]") {
-      const delta = key.sequence === "]" ? 1 : -1;
+    // Match bracket keys via sequence OR name OR raw — different terminals /
+    // kitty-vs-raw parsers populate these inconsistently for non-named keys.
+    const seq = (key.sequence ?? "") as string;
+    const name = (key.name ?? "") as string;
+    const raw = ((key as { raw?: string }).raw ?? "") as string;
+    const isOpen = seq === "[" || name === "[" || raw === "[";
+    const isClose = seq === "]" || name === "]" || raw === "]";
+    if (isOpen || isClose) {
+      const delta = isClose ? 1 : -1;
       const target = paneKeys[focusedPaneIdx];
       if (!target) return;
       setPaneSizes((prev) => {
@@ -428,20 +475,34 @@ export function StreamPage({
         if (next === current) return prev;
         return { ...prev, [target]: next };
       });
+      // Prevent PromptBar from auto-activating terminal-mode free input on `[` / `]`.
+      (key as { preventDefault?: () => void; stopPropagation?: () => void }).preventDefault?.();
+      (key as { preventDefault?: () => void; stopPropagation?: () => void }).stopPropagation?.();
     }
   });
 
   const paneCount = channelLayout === "split" ? Math.max(1, splitChannels.length) : 1;
-  // Use the live flexGrow ratio so a resized pane gets a wider graph too.
+  // Use the live flexGrow ratio so a resized pane gets a wider graph too. We
+  // mirror the actual flex layout below: outer row contains the split/stream
+  // sub-row (flexGrow 7 when Recent is shown, else 1) and the Recent panel
+  // (flexGrow growFor("recent")). This makes graph width track the real pane
+  // border instead of drifting based on a hardcoded Recent width.
+  const splitRowFlex = showRecentPanel ? 7 : 1;
+  const recentFlex = showRecentPanel ? growFor("recent") : 0;
   const splitGrowTotal = channelLayout === "split"
     ? splitChannels.reduce((sum, ch) => sum + growFor(`ch${ch}`), 0) || paneCount
     : 1;
   const graphWidthFor = useCallback((key: string): number => {
-    const streamAreaWidth = Math.max(20, width - (showRecentPanel ? 30 : 4));
-    if (channelLayout !== "split") return Math.max(18, streamAreaWidth - 6);
+    // Account for the outer container border + 1-cell padding.
+    const usable = Math.max(20, width - 2);
+    const splitAreaWidth = showRecentPanel
+      ? Math.floor(usable * splitRowFlex / (splitRowFlex + recentFlex))
+      : usable;
+    if (channelLayout !== "split") return Math.max(18, splitAreaWidth - 6);
     const ratio = growFor(key) / splitGrowTotal;
-    return Math.max(18, Math.floor(streamAreaWidth * ratio) - 6);
-  }, [channelLayout, growFor, showRecentPanel, splitGrowTotal, width]);
+    // -4 covers the Panel border (2) + the 1-cell padding inside the graph box on each side (2).
+    return Math.max(18, Math.floor(splitAreaWidth * ratio) - 4);
+  }, [channelLayout, growFor, recentFlex, showRecentPanel, splitGrowTotal, splitRowFlex, width]);
 
   const renderScrollLines = (lines: string[], focused = active) => (
     lines.length === 0 ? (
@@ -545,7 +606,7 @@ export function StreamPage({
     const statsEnabled = statsEnabledSet.has(channel);
     const focused = active && focusedKey === paneKey;
     return (
-      <Panel key={channel} title={title} flexGrow={flexGrow}>
+      <Panel key={channel} title={title} flexGrow={flexGrow} focused={focused}>
         <box style={{ flexDirection: "column", flexGrow: 1, flexShrink: 1, minHeight: 0 }}>
           <box style={{ flexDirection: "column", flexGrow: 1, flexShrink: 1, minHeight: 0 }}>
             {renderScrollLines(lines, focused)}
@@ -584,7 +645,7 @@ export function StreamPage({
           renderChannelPane(selectedChannel, streamTitle, displayLines, "stream", growFor("stream"))
         )}
         {showRecentPanel ? (
-          <Panel title="Recent" flexGrow={growFor("recent")} flexShrink={0}>
+          <Panel title="Recent" flexGrow={growFor("recent")} flexShrink={0} focused={active && focusedKey === "recent"}>
             <box style={{ flexDirection: "column", overflow: "hidden", padding: 1 }}>
               {recentCommands.slice(-20).map((cmd) => (
                 <text

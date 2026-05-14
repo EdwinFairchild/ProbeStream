@@ -127,6 +127,16 @@ export function AppFrame({ client, onQuit, initialSidecarLog, subscribeSidecarLo
     setLogEntries((entries) => [...entries, entry].slice(-500));
   }, []);
 
+  // Expose a tiny global so deep components (e.g. StreamPage key handlers)
+  // can write to the in-app Log page without prop-drilling. Temporary debug aid.
+  useEffect(() => {
+    (globalThis as unknown as { __probestreamDebug?: (msg: string, detail?: unknown) => void }).__probestreamDebug =
+      (msg: string, detail?: unknown) => appendLog("info", msg, detail);
+    return () => {
+      delete (globalThis as unknown as { __probestreamDebug?: unknown }).__probestreamDebug;
+    };
+  }, [appendLog]);
+
   const clearLog = useCallback(() => {
     clearSidecarLog?.();
     setLogEntries([]);

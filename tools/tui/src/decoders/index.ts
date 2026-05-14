@@ -126,6 +126,24 @@ export class ChunkRingBuffer {
     return out;
   }
 
+  /**
+   * Returns up to the last `n` chunks in chronological order without
+   * materialising the older portion of the ring.
+   */
+  tail(n: number): StreamChunk[] {
+    const take = Math.min(this.count, Math.max(0, n));
+    if (take === 0) return [];
+    const out: StreamChunk[] = new Array(take);
+    const start = this.count < this.capacity ? 0 : this.head;
+    const offset = this.count - take;
+    for (let i = 0; i < take; i++) {
+      const idx = (start + offset + i) % this.capacity;
+      const c = this.chunks[idx];
+      if (c) out[i] = c;
+    }
+    return out;
+  }
+
   get length(): number {
     return this.count;
   }
@@ -149,6 +167,7 @@ export class ChunkRingBuffer {
  */
 export class ChannelChunkStore {
   private rings = new Map<number, ChunkRingBuffer>();
+  private channelsCache: number[] | null = null;
 
   constructor(private capacityPerChannel: number) {}
 
@@ -171,26 +190,59 @@ export class ChannelChunkStore {
     if (!ring) {
       ring = new ChunkRingBuffer(this.capacityPerChannel);
       this.rings.set(chunk.channel, ring);
+      this.channelsCache = null;
     }
     ring.push(chunk);
   }
 
   clear(): void {
     this.rings.clear();
+    this.channelsCache = null;
   }
 
-  /** Merged view in seq order across all channels. */
-  toArray(): StreamChunk[] {
+  /** Sorted list of channel keys currently held. Cached between mutations. */
+  channels(): number[] {
+    if (this.channelsCache) return this.channelsCache;
+    const list = [...this.rings.keys()].sort((a, b) => a - b);
+    this.channelsCache = list;
+    return list;
+  }
+
+  /**
+   * Per-channel view. Returns at most `max` most-recent chunks for the channel
+   * without merging or sorting other channels — O(min(max, ring.length)).
+   */
+  byChannel(channel: number, max?: number): StreamChunk[] {
+    const ring = this.rings.get(channel);
+    if (!ring) return [];
+    if (max === undefined || max >= ring.length) return ring.toArray();
+    return ring.tail(max);
+  }
+
+  /**
+   * Merged view in seq order across all channels. When `max` is provided, only
+   * the last `max` chunks (after merge) are materialised — we still pull the
+   * tail of every per-channel ring (cheap), but we skip allocating the older
+   * portion of the merged array.
+   */
+  toArray(max?: number): StreamChunk[] {
     if (this.rings.size === 0) return [];
     if (this.rings.size === 1) {
       // Fast path: single channel needs no sort.
-      return [...this.rings.values()][0]!.toArray();
+      const ring = [...this.rings.values()][0]!;
+      if (max === undefined || max >= ring.length) return ring.toArray();
+      return ring.tail(max);
     }
+    // Pull a per-channel tail bounded by `max` so we don't sort every chunk
+    // when the caller only needs the tail.
+    const perChannelCap = max ?? Number.POSITIVE_INFINITY;
     const out: StreamChunk[] = [];
     for (const ring of this.rings.values()) {
-      for (const chunk of ring.toArray()) out.push(chunk);
+      const slice = perChannelCap >= ring.length ? ring.toArray() : ring.tail(perChannelCap);
+      for (const chunk of slice) out.push(chunk);
     }
     out.sort((a, b) => a.seq - b.seq);
+    if (max !== undefined && out.length > max) return out.slice(out.length - max);
     return out;
   }
 
