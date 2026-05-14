@@ -556,14 +556,17 @@ export function StreamPage({
     const GRAPH_HEIGHT = 6;
     const AXIS_WIDTH = 7; // room for `-123.4`
     const chartWidth = Math.max(12, graphWidthFor(paneKey) - AXIS_WIDTH - 1);
-    const layers = renderAreaGraph(samples, chartWidth, GRAPH_HEIGHT, latest !== undefined ? `last ${formatGraphNumber(latest)}` : undefined);
+    const layers = renderAreaGraph(samples, chartWidth, GRAPH_HEIGHT);
+    const header = latest !== undefined
+      ? `ch${channel} ${typeLabel}  last ${formatGraphNumber(latest)}`
+      : `ch${channel} ${typeLabel}`;
     return (
-      <box style={{ flexDirection: "column", flexGrow: 1, flexShrink: 1, minHeight: GRAPH_HEIGHT + 1, backgroundColor: theme.surfaceHigh, paddingLeft: 1, paddingRight: 1 }}>
+      <box style={{ flexDirection: "column", flexGrow: 1, flexShrink: 1, minHeight: GRAPH_HEIGHT + 3, backgroundColor: theme.surfaceHigh, paddingLeft: 1, paddingRight: 1, paddingTop: 1, paddingBottom: 1 }}>
         {samples.length === 0 ? (
-          <text style={{ fg: theme.muted }} content={`graph waiting: ch${channel} ${typeLabel}`} />
+          <text style={{ fg: theme.muted }} content={`waiting: ch${channel} ${typeLabel}`} />
         ) : (
           <>
-            <text style={{ fg: theme.textDim, flexShrink: 0 }} content={`graph ch${channel} ${typeLabel}  n=${samples.length}/${Math.max(1, graphWindowSize)}`} />
+            <text style={{ fg: theme.textDim, flexShrink: 0 }} content={header} />
             {layers.head.map((headLine, index) => (
               <box key={index} style={{ flexDirection: "row", flexShrink: 0 }}>
                 <text style={{ fg: theme.textDim, flexShrink: 0 }} content={(layers.axis[index] ?? "").padStart(AXIS_WIDTH, " ") + " "} />
@@ -583,20 +586,20 @@ export function StreamPage({
     if (!isGraphableChannelType(type)) {
       return (
         <box style={{ flexDirection: "column", flexShrink: 0, height: 2, backgroundColor: theme.surfaceVariant, paddingLeft: 1 }}>
-          <text style={{ fg: theme.muted }} content={`stats inactive: ch${channel} is ${typeLabel}`} />
+          <text style={{ fg: theme.muted }} content={`inactive: ch${channel} is ${typeLabel}`} />
         </box>
       );
     }
     if (!stats || stats.count === 0) {
       return (
         <box style={{ flexDirection: "column", flexShrink: 0, height: 2, backgroundColor: theme.surfaceVariant, paddingLeft: 1 }}>
-          <text style={{ fg: theme.muted }} content={`stats waiting: ch${channel} ${typeLabel}`} />
+          <text style={{ fg: theme.muted }} content={`waiting: ch${channel} ${typeLabel}`} />
         </box>
       );
     }
     return (
       <box style={{ flexDirection: "column", flexShrink: 0, height: 2, backgroundColor: theme.surfaceVariant, paddingLeft: 1 }}>
-        <text style={{ fg: theme.secondary }} content={`stats ch${channel} n=${stats.count} mean=${formatGraphNumber(stats.mean)} min=${formatGraphNumber(stats.min)} max=${formatGraphNumber(stats.max)} sd=${formatGraphNumber(stats.stddev)}`} />
+        <text style={{ fg: theme.secondary }} content={`ch${channel} n=${stats.count} mean=${formatGraphNumber(stats.mean)} min=${formatGraphNumber(stats.min)} max=${formatGraphNumber(stats.max)} sd=${formatGraphNumber(stats.stddev)}`} />
       </box>
     );
   };
