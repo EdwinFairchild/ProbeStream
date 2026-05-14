@@ -8,6 +8,7 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+build_stress/
 *.whl
 .venv/
 venv/
@@ -46,3 +47,7 @@ Thumbs.db
 *.agents/
 *.claude/
 skills-lock.json
+
+# Per-developer host-tool path overrides (see tests/.env.example)
+tests/.env
+.env

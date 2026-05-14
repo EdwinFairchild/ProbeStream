@@ -1,6 +1,7 @@
 #include "main.h"
 #include "gpio.h"
 #include "probestream.h"
+#include <math.h>
 #include <string.h>
 
 void SystemClock_Config(void);
@@ -14,6 +15,8 @@ void SystemClock_Config(void);
  *   2 = bulk fill: write 'A' bytes filling entire buffer each iteration
  *   3 = small packets: write "P:NNNN\n" (~8 bytes) as fast as possible
  *   4 = echo: read down-channel, write back on up-channel (latency test)
+ *   5 = realistic periodic: one structured log line every ~10 ms
+ *       (sensor-style telemetry, ~50 B/line ~ 5 KB/s — what real firmware emits)
  *   6 = multi-channel: ch0 command/log traffic, ch1 telemetry traffic
  *   7 = graph demo: ch0 logs, ch1 float32 waveform, ch2 int32 ramp
  *
@@ -190,6 +193,34 @@ int main(void)
         case 4:
             // Echo mode — handled in check_commands
             break;
+        case 5: {
+            // Realistic periodic telemetry: one structured line every ~10 ms.
+            // Mimics typical product firmware (sensor sample, state report,
+            // periodic heartbeat) — bursty enough to show streaming, slow
+            // enough to be readable. ~50 B / 10 ms = ~5 KB/s.
+            static uint32_t last_tick = 0;
+            uint32_t now = HAL_GetTick();
+            if ((now - last_tick) >= 10) {
+                last_tick = now;
+                static const char *levels[4] = { "INFO", "INFO", "INFO", "WARN" };
+                const char *lvl = levels[seq_counter & 0x3];
+                // Pseudo-random-looking varying values from seq_counter.
+                uint32_t temp_x10 = 230 + (seq_counter % 47);     // 23.0 .. 27.6
+                uint32_t hum     = 40 + ((seq_counter * 7) % 25); // 40 .. 64
+                uint32_t batt    = 70 + ((seq_counter * 3) % 30); // 70 .. 99
+                int n = PS_Printf(0,
+                    "[%lu.%03lu] %s sensor seq=%lu temp=%lu.%lu hum=%lu batt=%lu%%\n",
+                    now / 1000, now % 1000, lvl, seq_counter,
+                    temp_x10 / 10, temp_x10 % 10, hum, batt);
+                if (n > 0) {
+                    bytes_written += (uint32_t)n;
+                    seq_counter++;
+                } else {
+                    drops++;
+                }
+            }
+            break;
+        }
         case 6: {
             static uint32_t last_tick = 0;
             uint32_t now = HAL_GetTick();
@@ -209,8 +240,12 @@ int main(void)
             uint32_t now = HAL_GetTick();
             if ((now - last_tick) >= 25) {
                 last_tick = now;
-                int n0 = PS_Printf(0, "[m7 graph] seq=%lu tick=%lu ch1=float32 ch2=int32\n", seq_counter, now);
-                float wave = 25.0f + (float)(seq_counter % 100u) * 0.05f;
+                int n0 = PS_Printf(0, "[m7 graph] seq=%lu tick=%lu ch1=float32(sine) ch2=int32\n", seq_counter, now);
+                /* Sine wave: 1 Hz at the 25 ms tick rate (40 samples/cycle),
+                 * amplitude 5.0 around 25.0. */
+                const float two_pi = 6.28318530717958647692f;
+                float phase = two_pi * (float)(seq_counter % 40u) / 40.0f;
+                float wave = 25.0f + 5.0f * sinf(phase);
                 int32_t ramp = (int32_t)(seq_counter % 120u) - 60;
                 uint32_t w1 = PS_WriteFloat(1, wave);
                 uint32_t w2 = PS_WriteInt(2, ramp);

@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
 """
-ProbeStream G4 end-to-end streaming test harness.
+ProbeStream end-to-end streaming test harness (board-agnostic).
 
-Builds the stress firmware, flashes it to the Nucleo-G474RE, then runs a
-long-duration mode-5 stream (realistic periodic telemetry ~5 KB/s) directly
-through the same OpenOcdTcl + ProbeStreamReader stack that the sidecar uses.
+Builds the stress firmware for the selected board, flashes it via OpenOCD,
+then runs a long-duration mode-5 stream (realistic periodic telemetry ~5 KB/s)
+through the same OpenOcdTcl + ProbeStreamReader stack the sidecar uses.
 
-No TUI required.  Run from any directory:
-
-    python3 tests/smoke_nucleo_g474/stream_test.py [options]
+Usage:
+    python3 tests/stream_test.py --board g474 [options]
+    python3 tests/stream_test.py --board u385 [options]
 
 Options:
     --duration N        Stream for N seconds (default 120)
     --mode N            Firmware test mode (default 5)
-    --skip-flash        Skip build + flash (use whatever is already on the board)
-    --skip-build        Flash existing build, skip CMake/make
-    --openocd-bin PATH  Override OpenOCD binary path
+    --skip-flash        Skip build + flash (use whatever is on the board)
+    --skip-build        Flash existing build_stress/ ELF, skip CMake
+    --openocd-bin PATH  Override OpenOCD binary path (else PROBESTREAM_OPENOCD_BIN / PATH)
+    --openocd-scripts P Override OpenOCD scripts dir (else PROBESTREAM_OPENOCD_SCRIPTS)
+    --stlink-sn SN      ST-LINK serial number (else PROBESTREAM_<BOARD>_STLINK_SN)
     --debug             Verbose logging
 """
 
@@ -23,6 +25,7 @@ import argparse
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -30,114 +33,152 @@ import traceback
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# Paths
+# Paths / sys.path
 # ---------------------------------------------------------------------------
-REPO_ROOT = Path(__file__).resolve().parents[2]
-G4_DIR    = Path(__file__).resolve().parent
-BUILD_DIR = G4_DIR / "build_stress"
+REPO_ROOT   = Path(__file__).resolve().parents[1]
+TESTS_DIR   = Path(__file__).resolve().parent
 SIDECAR_DIR = REPO_ROOT / "tools" / "tui" / "sidecar"
 
 sys.path.insert(0, str(SIDECAR_DIR))
+sys.path.insert(0, str(TESTS_DIR))
 from openocd_tcl import OpenOcdTcl
 from probestream_reader import ProbeStreamReader
+import load_env  # noqa: F401  (loads tests/.env if present)
+
 
 # ---------------------------------------------------------------------------
-# Hardware constants (from benchmark_g4.py)
+# Per-board configuration
 # ---------------------------------------------------------------------------
-OPENOCD_BIN_DEFAULT = (
-    "/opt/st/stm32cubeide_1.18.1/plugins/"
-    "com.st.stm32cube.ide.mcu.externaltools.openocd.linux64_2.4.100.202501161620/"
-    "tools/bin/openocd"
-)
-OPENOCD_SCRIPTS_DEFAULT = "/media/eddie/Engineering/Projects/ViewAlyzer_Root/external/OpenOCD/tcl"
-OPENOCD_SCRIPTS_CANDIDATES = [
-    REPO_ROOT.parent / "external" / "OpenOCD" / "tcl",
-    Path(r"C:\opeonocd_12.0.3\share\openocd\scripts"),
-    Path(r"C:\openocd\share\openocd\scripts"),
-]
-G4_STLINK_SN    = "0033004B3033510735393935"
-TCL_PORT        = 6667   # use a separate port so we don't stomp a running dev session
-RAM_START       = 0x20000000
-RAM_SIZE        = 128 * 1024
+TCL_PORT  = 6667           # separate from a running dev session on 6666
+RAM_START = 0x20000000
+
+BOARDS: dict[str, dict] = {
+    "g474": {
+        "dir":          TESTS_DIR / "smoke_nucleo_g474",
+        "ocd_target":   "target/stm32g4x.cfg",
+        "ram_size":     128 * 1024,
+        "stlink_env":   "PROBESTREAM_G4_STLINK_SN",
+        "stlink_def":   "0033004B3033510735393935",
+        "flash_method": "openocd",
+    },
+    "u385": {
+        "dir":          TESTS_DIR / "smoke_nucleo_u385",
+        "ocd_target":   "target/stm32u3x.cfg",
+        "ram_size":     192 * 1024,
+        "stlink_env":   "PROBESTREAM_U3_STLINK_SN",
+        "stlink_def":   "",   # U3 board: no pinned serial by default
+        # OpenOCD's U3 flash driver fails on dual-bank erase; use ST's CLI tool.
+        "flash_method": "stm32_programmer",
+    },
+}
 
 
 # ---------------------------------------------------------------------------
 # Build + flash
 # ---------------------------------------------------------------------------
 
-def build(skip_build: bool, debug: bool) -> Path:
+def build(board_dir: Path, build_dir: Path, skip_build: bool, debug: bool) -> Path:
     if skip_build:
-        elf = next(BUILD_DIR.glob("*.elf"), None)
+        elf = next(build_dir.glob("*.elf"), None)
         if not elf:
-            die("No .elf found in build_stress/ — run without --skip-build first")
+            die(f"No .elf found in {build_dir} — run without --skip-build first")
         log(f"Using existing ELF: {elf}")
         return elf
 
-    clean_stale_cmake_cache(BUILD_DIR)
+    clean_stale_cmake_cache(build_dir)
 
     log("Configuring CMake (stress test)…")
-    BUILD_DIR.mkdir(exist_ok=True)
-    cmake_cmd = [
-        "cmake", "-S", str(G4_DIR), "-B", str(BUILD_DIR), "-G", "Ninja",
+    build_dir.mkdir(exist_ok=True)
+    run([
+        "cmake", "-S", str(board_dir), "-B", str(build_dir), "-G", "Ninja",
         "-DCMAKE_BUILD_TYPE=Debug",
         "-DSTRESS_TEST=ON",
-    ]
-    run(cmake_cmd, debug)
+    ], debug)
 
     log("Building…")
-    run(["cmake", "--build", str(BUILD_DIR), "--", "-j4"], debug)
+    run(["cmake", "--build", str(build_dir), "--", "-j4"], debug)
 
-    elf = next(BUILD_DIR.glob("*.elf"), None)
+    elf = next(build_dir.glob("*.elf"), None)
     if not elf:
         die("Build succeeded but no .elf found — check CMake output")
     log(f"ELF: {elf}")
     return elf
 
 
-def flash(elf: Path, ocd_bin: str, scripts_dir: Path, stlink_sn: str, debug: bool):
+def flash_openocd(elf: Path, ocd_bin: str, scripts_dir: Path, ocd_target: str,
+                  stlink_sn: str, debug: bool):
     log(f"Flashing {elf.name} via OpenOCD…")
     elf_tcl_path = elf.resolve().as_posix()
-    cmd = [
-        ocd_bin, "-s", str(scripts_dir),
-        "-c", f"adapter serial {stlink_sn}",
+    cmd = [ocd_bin, "-s", str(scripts_dir)]
+    if stlink_sn:
+        cmd += ["-c", f"adapter serial {stlink_sn}"]
+    cmd += [
         "-f", "interface/stlink.cfg",
-        "-f", "target/stm32g4x.cfg",
+        "-f", ocd_target,
         "-c", f"program {{{elf_tcl_path}}} verify reset exit",
     ]
     run(cmd, debug)
     log("Flash complete — board is running new firmware")
-    time.sleep(0.3)   # let HAL_Init finish
+    time.sleep(0.3)
+
+
+def flash_stm32_programmer(elf: Path, stlink_sn: str, debug: bool):
+    """Use STM32_Programmer_CLI — needed for U3 (OpenOCD's flash driver fails)."""
+    prog = os.environ.get("PROBESTREAM_STM32_PROGRAMMER") or shutil.which("STM32_Programmer_CLI")
+    if not prog or not Path(prog).exists():
+        die("STM32_Programmer_CLI not found. Set PROBESTREAM_STM32_PROGRAMMER or put it on PATH.")
+
+    hex_path = elf.with_suffix(".hex")
+    log(f"Converting {elf.name} → {hex_path.name}…")
+    objcopy = shutil.which("arm-none-eabi-objcopy")
+    if not objcopy:
+        die("arm-none-eabi-objcopy not found on PATH")
+    run([objcopy, "-O", "ihex", str(elf), str(hex_path)], debug)
+
+    log(f"Flashing {hex_path.name} via STM32_Programmer_CLI…")
+    cmd = [prog, "-c", "port=SWD", "mode=UR"]
+    if stlink_sn:
+        cmd += [f"sn={stlink_sn}"]
+    cmd += ["-e", "all", "-w", str(hex_path), "-v", "-rst"]
+    run(cmd, debug)
+    log("Flash complete — board is running new firmware")
+    time.sleep(0.3)
+
+
+def flash(method: str, elf: Path, ocd_bin: str, scripts_dir: Path, ocd_target: str,
+          stlink_sn: str, debug: bool):
+    if method == "stm32_programmer":
+        flash_stm32_programmer(elf, stlink_sn, debug)
+    else:
+        flash_openocd(elf, ocd_bin, scripts_dir, ocd_target, stlink_sn, debug)
 
 
 # ---------------------------------------------------------------------------
 # OpenOCD management
 # ---------------------------------------------------------------------------
 
-def start_openocd(ocd_bin: str, scripts_dir: Path, stlink_sn: str, debug: bool) -> subprocess.Popen:
+def start_openocd(ocd_bin: str, scripts_dir: Path, ocd_target: str,
+                  stlink_sn: str, debug: bool) -> subprocess.Popen:
     log(f"Starting OpenOCD (port {TCL_PORT})…")
-    kwargs: dict = {
-        "start_new_session": True,
-    }
+    kwargs: dict = {"start_new_session": True}
     if debug:
-        kwargs["stdout"] = None   # inherit → visible in terminal
+        kwargs["stdout"] = None
         kwargs["stderr"] = None
     else:
         kwargs["stdout"] = subprocess.DEVNULL
         kwargs["stderr"] = subprocess.DEVNULL
 
-    proc = subprocess.Popen(
-        [
-            ocd_bin, "-s", str(scripts_dir),
-            "-c", f"adapter serial {stlink_sn}",
-            "-f", "interface/stlink.cfg",
-            "-f", "target/stm32g4x.cfg",
-            "-c", f"tcl_port {TCL_PORT}",
-        ],
-        **kwargs,
-    )
-    # Wait for Tcl port to open.
+    cmd = [ocd_bin, "-s", str(scripts_dir)]
+    if stlink_sn:
+        cmd += ["-c", f"adapter serial {stlink_sn}"]
+    cmd += [
+        "-f", "interface/stlink.cfg",
+        "-f", ocd_target,
+        "-c", f"tcl_port {TCL_PORT}",
+    ]
+
+    proc = subprocess.Popen(cmd, **kwargs)
     deadline = time.time() + 10.0
-    import socket
     while time.time() < deadline:
         if proc.poll() is not None:
             die(f"OpenOCD exited immediately (code {proc.returncode})")
@@ -171,18 +212,16 @@ def stop_openocd(proc: subprocess.Popen):
 # Discover + quiesce
 # ---------------------------------------------------------------------------
 
-def discover_cb(tcl: OpenOcdTcl, debug: bool) -> int:
+def discover_cb(tcl: OpenOcdTcl, ram_size: int, debug: bool) -> ProbeStreamReader:
     log("Scanning RAM for ProbeStream control block…")
     reader = ProbeStreamReader(tcl, read_mode="auto")
-    found = reader.discover(RAM_START, RAM_SIZE, scan_chunk_size=4096)
-    if not found:
+    if not reader.discover(RAM_START, ram_size, scan_chunk_size=4096):
         die("Control block not found — is the stress firmware running?")
     log(f"Control block at 0x{reader.cb_addr:08X}  up={reader.num_up}  down={reader.num_down}")
     return reader
 
 
 def quiesce(tcl: OpenOcdTcl):
-    """Disable OpenOCD's background target polling so our reads don't race it."""
     try:
         tcl.send("poll off")
         log("OpenOCD background polling disabled (poll off)")
@@ -196,6 +235,7 @@ def quiesce(tcl: OpenOcdTcl):
 
 def send_mode_cmd(reader: ProbeStreamReader, mode: int):
     cmd = f"mode {mode}\n".encode()
+    n = 0
     for _ in range(20):
         n = reader.write_down(0, cmd)
         if n == len(cmd):
@@ -204,34 +244,26 @@ def send_mode_cmd(reader: ProbeStreamReader, mode: int):
     log(f"Warning: could not write full mode command (sent {n}/{len(cmd)} bytes)")
 
 
-def run_stream_test(
-    reader: ProbeStreamReader,
-    mode: int,
-    duration: float,
-    debug: bool,
-):
+def run_stream_test(reader: ProbeStreamReader, mode: int, duration: float, debug: bool) -> bool:
     log(f"Starting mode-{mode} stream for {duration:.0f}s…")
     send_mode_cmd(reader, mode)
     time.sleep(0.1)
-
-    # Drain any pre-existing boot message
     reader.poll_up()
 
-    total_bytes   = 0
+    total_bytes = 0
     total_batches = 0
-    drop_events   = 0
-    stall_events  = 0
-    last_data_t   = time.time()
+    drop_events = 0
+    stall_events = 0
+    last_data_t = time.time()
     last_report_t = time.time()
-    start_t       = time.time()
+    start_t = time.time()
 
-    # Per-second rate sampling
     window_bytes = 0
     window_start = time.time()
     rates: list[float] = []
 
-    STALL_THRESHOLD = 5.0    # seconds with no data → stall event
-    REPORT_INTERVAL = 5.0    # print progress every N seconds
+    STALL_THRESHOLD = 5.0
+    REPORT_INTERVAL = 5.0
 
     consecutive_errors = 0
 
@@ -239,10 +271,10 @@ def run_stream_test(
         try:
             def on_data(_ch: int, data: bytes) -> None:
                 nonlocal total_bytes, total_batches, window_bytes, last_data_t
-                total_bytes   += len(data)
+                total_bytes += len(data)
                 total_batches += 1
-                window_bytes  += len(data)
-                last_data_t    = time.time()
+                window_bytes += len(data)
+                last_data_t = time.time()
 
             read = reader.poll_up(on_data)
             consecutive_errors = 0
@@ -259,14 +291,11 @@ def run_stream_test(
 
         now = time.time()
 
-        # Rate sampling (1-second window)
         if now - window_start >= 1.0:
-            rate = window_bytes / (now - window_start)
-            rates.append(rate)
+            rates.append(window_bytes / (now - window_start))
             window_bytes = 0
             window_start = now
 
-        # Stall detection
         idle_secs = now - last_data_t
         if idle_secs >= STALL_THRESHOLD and total_bytes > 0:
             stall_events += 1
@@ -275,9 +304,8 @@ def run_stream_test(
                 f"(total {total_bytes} bytes, {total_batches} batches, "
                 f"{stall_events} stalls so far)"
             )
-            last_data_t = now   # reset so we only log once per stall
+            last_data_t = now
 
-        # Progress report
         if now - last_report_t >= REPORT_INTERVAL:
             elapsed = now - start_t
             rate_now = rates[-1] if rates else 0.0
@@ -291,7 +319,6 @@ def run_stream_test(
             last_report_t = now
 
         if read == 0:
-            # Idle: back off a bit
             time.sleep(0.005)
 
     elapsed = time.time() - start_t
@@ -312,9 +339,7 @@ def run_stream_test(
     print(f"  Verdict:       {verdict}")
     print("=" * 60)
 
-    # Stop firmware
     send_mode_cmd(reader, 0)
-
     return verdict == "PASS"
 
 
@@ -329,8 +354,7 @@ def _fmt_rate(bps: float) -> str:
 
 
 def log(msg: str):
-    ts = time.strftime("%H:%M:%S")
-    print(f"[{ts}] {msg}", flush=True)
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
 def die(msg: str):
@@ -353,46 +377,49 @@ def clean_stale_cmake_cache(build_dir: Path):
     files_dir = build_dir / "CMakeFiles"
     if not cache.exists():
         return
-
     text = cache.read_text(errors="ignore")
-    stale_markers = ["/opt/st/", "/media/eddie/", "CMAKE_MAKE_PROGRAM:FILEPATH=/opt/"]
-    stale = any(marker in text.replace("\\", "/") for marker in stale_markers)
-
+    repo_root_str = str(REPO_ROOT).replace("\\", "/")
+    cache_norm = text.replace("\\", "/")
+    stale = "CMAKE_MAKE_PROGRAM:FILEPATH=/opt/" in cache_norm
+    if not stale:
+        for line in text.splitlines():
+            if line.startswith("CMAKE_HOME_DIRECTORY:INTERNAL="):
+                home = line.split("=", 1)[1].replace("\\", "/")
+                if home and not home.startswith(repo_root_str):
+                    stale = True
+                break
     if not stale:
         for line in text.splitlines():
             if line.startswith("CMAKE_MAKE_PROGRAM:FILEPATH="):
-                make_program = Path(line.split("=", 1)[1])
-                stale = not make_program.exists()
+                if not Path(line.split("=", 1)[1]).exists():
+                    stale = True
                 break
-
     if stale:
-        log("Removing stale CMake cache before Windows reconfigure")
+        log("Removing stale CMake cache before reconfigure")
         cache.unlink(missing_ok=True)
         shutil.rmtree(files_dir, ignore_errors=True)
 
 
-def resolve_openocd_bin(requested: str) -> str:
-    if requested and Path(requested).exists():
-        return requested
+def resolve_openocd_bin(requested: str | None) -> str:
+    path = requested or os.environ.get("PROBESTREAM_OPENOCD_BIN")
+    if path and Path(path).exists():
+        return path
     fallback = shutil.which("openocd") or shutil.which("openocd.exe")
-    if not fallback:
-        die(f"OpenOCD binary not found at {requested} and not on PATH")
-    log(f"OpenOCD not found at default path; using {fallback}")
-    return fallback
+    if fallback:
+        if path:
+            log(f"OpenOCD not found at {path}; using {fallback}")
+        return fallback
+    die("OpenOCD binary not found. Set PROBESTREAM_OPENOCD_BIN or pass --openocd-bin.")
 
 
-def resolve_openocd_scripts(requested: str | None) -> Path:
-    candidates = []
-    if requested:
-        candidates.append(Path(requested))
-    candidates.append(Path(OPENOCD_SCRIPTS_DEFAULT))
-    candidates.extend(OPENOCD_SCRIPTS_CANDIDATES)
-
-    for candidate in candidates:
-        if (candidate / "interface" / "stlink.cfg").exists() and (candidate / "target" / "stm32g4x.cfg").exists():
-            return candidate
-    checked = ", ".join(str(path) for path in candidates)
-    die(f"OpenOCD scripts not found; checked: {checked}")
+def resolve_openocd_scripts(requested: str | None, ocd_target: str) -> Path:
+    path = requested or os.environ.get("PROBESTREAM_OPENOCD_SCRIPTS")
+    if path:
+        p = Path(path)
+        if (p / "interface" / "stlink.cfg").exists() and (p / ocd_target).exists():
+            return p
+    die(f"OpenOCD scripts dir not found (need {ocd_target}). "
+        f"Set PROBESTREAM_OPENOCD_SCRIPTS or pass --openocd-scripts.")
 
 
 # ---------------------------------------------------------------------------
@@ -400,73 +427,66 @@ def resolve_openocd_scripts(requested: str | None) -> Path:
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="ProbeStream G4 streaming test")
-    parser.add_argument("--duration",    type=float, default=120, metavar="S",
+    parser = argparse.ArgumentParser(description="ProbeStream streaming test harness")
+    parser.add_argument("--board", required=True, choices=sorted(BOARDS),
+                        help="Target board: g474 (Nucleo-G474RE) or u385 (Nucleo-U385)")
+    parser.add_argument("--duration", type=float, default=120, metavar="S",
                         help="Stream duration in seconds (default 120)")
-    parser.add_argument("--mode",        type=int,   default=5,
+    parser.add_argument("--mode", type=int, default=5,
                         help="Firmware test mode (default 5 = realistic periodic)")
-    parser.add_argument("--skip-flash",  action="store_true",
+    parser.add_argument("--skip-flash", action="store_true",
                         help="Skip build + flash; board must already have stress firmware")
-    parser.add_argument("--skip-build",  action="store_true",
+    parser.add_argument("--skip-build", action="store_true",
                         help="Skip CMake rebuild; flash existing build_stress/ ELF")
-    parser.add_argument("--openocd-bin", default=OPENOCD_BIN_DEFAULT,
-                        help="Path to OpenOCD binary")
+    parser.add_argument("--openocd-bin", default=None,
+                        help="Path to OpenOCD binary (overrides PROBESTREAM_OPENOCD_BIN)")
     parser.add_argument("--openocd-scripts", default=None,
                         help="Path to OpenOCD scripts directory")
-    parser.add_argument("--stlink-sn", default=G4_STLINK_SN,
-                        help="ST-LINK serial number for the G4 board")
-    parser.add_argument("--debug",       action="store_true",
-                        help="Verbose output")
+    parser.add_argument("--stlink-sn", default=None,
+                        help="ST-LINK serial number (overrides PROBESTREAM_<BOARD>_STLINK_SN)")
+    parser.add_argument("--debug", action="store_true", help="Verbose output")
     args = parser.parse_args()
+
+    cfg = BOARDS[args.board]
+    board_dir: Path = cfg["dir"]
+    build_dir = board_dir / "build_stress"
+    ocd_target: str = cfg["ocd_target"]
+    ram_size: int = cfg["ram_size"]
+    stlink_sn = (
+        args.stlink_sn
+        or os.environ.get(cfg["stlink_env"])
+        or cfg["stlink_def"]
+    )
 
     print()
     print("=" * 60)
-    print("  ProbeStream G4 streaming test harness")
-    print(f"  mode={args.mode}  duration={args.duration}s")
+    print(f"  ProbeStream streaming test harness  [board={args.board}]")
+    print(f"  mode={args.mode}  duration={args.duration}s  ram={ram_size // 1024} KB")
     print("=" * 60)
     print()
 
     ocd_bin = resolve_openocd_bin(args.openocd_bin)
-    scripts_dir = resolve_openocd_scripts(args.openocd_scripts)
+    scripts_dir = resolve_openocd_scripts(args.openocd_scripts, ocd_target)
     log(f"OpenOCD scripts: {scripts_dir}")
-    log(f"ST-LINK serial: {args.stlink_sn}")
+    log(f"ST-LINK serial: {stlink_sn or '(unset — using first ST-LINK found)'}")
 
-    # 1. Build + flash
     if not args.skip_flash:
-        elf = build(skip_build=args.skip_build, debug=args.debug)
-        flash(elf, ocd_bin, scripts_dir, args.stlink_sn, debug=args.debug)
-        time.sleep(0.5)   # give firmware time to initialise after reset
+        elf = build(board_dir, build_dir, skip_build=args.skip_build, debug=args.debug)
+        flash(cfg["flash_method"], elf, ocd_bin, scripts_dir, ocd_target, stlink_sn, debug=args.debug)
+        time.sleep(0.5)
 
-    # 2. Start streaming OpenOCD
-    ocd = start_openocd(ocd_bin, scripts_dir, args.stlink_sn, debug=args.debug)
-
+    ocd = start_openocd(ocd_bin, scripts_dir, ocd_target, stlink_sn, debug=args.debug)
     try:
-        # 3. Connect Tcl
         tcl = OpenOcdTcl(host="localhost", port=TCL_PORT, timeout=10.0)
         tcl.connect()
-
-        # 4. Quiesce — this is the key fix being tested
         quiesce(tcl)
-
-        # 5. Discover control block
-        reader = discover_cb(tcl, debug=args.debug)
-
-        # 6. Drain any boot messages
+        reader = discover_cb(tcl, ram_size, debug=args.debug)
         time.sleep(0.3)
         reader.poll_up()
-
-        # 7. Run the stream test
         print()
-        passed = run_stream_test(
-            reader,
-            mode=args.mode,
-            duration=args.duration,
-            debug=args.debug,
-        )
-
+        passed = run_stream_test(reader, mode=args.mode, duration=args.duration, debug=args.debug)
         tcl.close()
         return 0 if passed else 1
-
     finally:
         stop_openocd(ocd)
 

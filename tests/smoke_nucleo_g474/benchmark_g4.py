@@ -5,10 +5,14 @@ Compares against U3 (mdw-only) numbers.
 """
 
 import socket, struct, time, sys, statistics, subprocess, os
+from pathlib import Path
 
-OPENOCD_BIN = "/opt/st/stm32cubeide_1.18.1/plugins/com.st.stm32cube.ide.mcu.externaltools.openocd.linux64_2.4.100.202501161620/tools/bin/openocd"
-OPENOCD_SCRIPTS = "/media/eddie/Engineering/Projects/ViewAlyzer_Root/external/OpenOCD/tcl"
-G4_STLINK_SN = "0033004B3033510735393935"
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import load_env  # noqa: F401  (loads tests/.env if present)
+
+OPENOCD_BIN = os.environ["PROBESTREAM_OPENOCD_BIN"]
+OPENOCD_SCRIPTS = os.environ["PROBESTREAM_OPENOCD_SCRIPTS"]
+G4_STLINK_SN = os.environ.get("PROBESTREAM_G4_STLINK_SN", "0033004B3033510735393935")
 
 TCL_PORT = 6666
 MAGIC = b"ProbeStream\x00\x00\x00\x00\x00"

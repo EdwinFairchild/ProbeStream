@@ -12,10 +12,14 @@ import sys
 import time
 import os
 import statistics
+from pathlib import Path
 
-OPENOCD_BIN = "/opt/st/stm32cubeide_1.18.1/plugins/com.st.stm32cube.ide.mcu.externaltools.openocd.linux64_2.4.100.202501161620/tools/bin/openocd"
-OPENOCD_SCRIPTS = "/media/eddie/Engineering/Projects/ViewAlyzer_Root/external/OpenOCD/tcl"
-STM32_PROGRAMMER = "/opt/st/stm32cubeclt_1.21.0/STM32CubeProgrammer/bin/STM32_Programmer_CLI"
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import load_env  # noqa: F401  (loads tests/.env if present)
+
+OPENOCD_BIN = os.environ["PROBESTREAM_OPENOCD_BIN"]
+OPENOCD_SCRIPTS = os.environ["PROBESTREAM_OPENOCD_SCRIPTS"]
+STM32_PROGRAMMER = os.environ["PROBESTREAM_STM32_PROGRAMMER"]
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ELF_PATH = os.path.join(SCRIPT_DIR, "build_stress/PS_Smoke.elf")
 HEX_PATH = os.path.join(SCRIPT_DIR, "build_stress/PS_Smoke.hex")
