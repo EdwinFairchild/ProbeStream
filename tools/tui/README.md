@@ -147,6 +147,8 @@ For a complete first-run walkthrough, including settings, OpenOCD setup, probe s
 ### Streaming
 `/start`, `/stop`, `/channel <n>`, `/mode raw|hex|ascii|line`, `/clear`
 
+Channels carry a type tag (`raw`, `text`, `ascii-number`, `int32`, `uint32`, `float32`, `float64`) set by the firmware via `PS_WriteInt`/`PS_WriteUInt`/`PS_WriteFloat`/`PS_WriteDouble` or `PS_SetChannelType`. The Stream page decodes typed numeric channels and enables graphing and running stats on them automatically. See [Typed numeric channels](../../docs/API.md#typed-numeric-channels) and the [graphing notes in the TUI Quick Start](../../docs/TUI-QuickStart.md).
+
 ### Terminal
 `/terminal [channel]`, `/terminal exit`, `/send <text>`, `/send-hex <hex>`
 

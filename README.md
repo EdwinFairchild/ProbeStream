@@ -112,7 +112,14 @@ ProbeStream/
    ```c
    PS_Printf(0, "tick %lu\n", HAL_GetTick());
    ```
-4. Optionally drain incoming bytes from the host:
+4. Or push typed numeric samples that the host can graph and run stats on:
+   ```c
+   PS_WriteInt(1, encoder_count);     // int32 channel
+   PS_WriteFloat(2, temperature_c);   // float32 channel
+   PS_WriteDouble(3, voltage_v);      // float64 channel
+   ```
+   Each typed write tags the channel (`PS_CHANNEL_TYPE_INT32`, `_UINT32`, `_FLOAT32`, `_FLOAT64`, `_ASCII_NUMBER`, `_TEXT`, `_RAW`) so the TUI knows how to decode it. See [Typed numeric channels](docs/API.md#typed-numeric-channels).
+5. Optionally drain incoming bytes from the host:
    ```c
    uint8_t cmd[64];
    uint32_t n = PS_Read(0, cmd, sizeof(cmd));
