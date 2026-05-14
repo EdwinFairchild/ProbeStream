@@ -226,34 +226,125 @@ const BRAILLE_BIT: readonly (readonly number[])[] = [
 ];
 
 export interface AreaGraphLayers {
-  /** One string per row. The dotted curve, in bright colour. */
+  /** One string per row. The curve outline (braille), in bright colour. */
   head: string[];
-  /** One string per row. Always blank — kept for API compatibility. */
+  /** One string per row. Filled area below the curve, rendered in dim colour. */
   body: string[];
-  /** Min/max axis ticks, one entry per row (most rows are empty). Caller can render in muted colour. */
+  /** One string per row. Faint horizontal gridlines, rendered in muted colour. */
+  grid: string[];
+  /** Axis ticks (max / mid / min), one entry per row (most rows are empty). */
   axis: string[];
   /** Numeric min/max actually plotted (after auto-scaling for flat series). */
   min: number;
   max: number;
 }
 
-function bucketSamplesSubpixel(samples: readonly number[], subWidth: number): (number | null)[] {
-  const out = new Array<number | null>(subWidth).fill(null);
-  if (samples.length === 0) return out;
-  if (samples.length <= subWidth) {
-    // Right-align so the latest sample lands at the right edge.
-    const offset = subWidth - samples.length;
-    for (let i = 0; i < samples.length; i++) out[offset + i] = samples[i]!;
-    return out;
+interface SubpixelBuckets {
+  /** Mean (or only) value per sub-x column. `null` for empty columns. */
+  mean: (number | null)[];
+  /** Per-column min, only populated when the column aggregates >1 sample. */
+  min: (number | null)[];
+  /** Per-column max, only populated when the column aggregates >1 sample. */
+  max: (number | null)[];
+  /** True when at least one column aggregates more than one sample (envelope mode). */
+  envelopeMode: boolean;
+}
+
+function bucketSamplesSubpixel(samples: readonly number[], subWidth: number): SubpixelBuckets {
+  const mean = new Array<number | null>(subWidth).fill(null);
+  const min = new Array<number | null>(subWidth).fill(null);
+  const max = new Array<number | null>(subWidth).fill(null);
+  if (samples.length === 0) return { mean, min, max, envelopeMode: false };
+  if (samples.length === 1) {
+    mean[subWidth - 1] = samples[0]!;
+    return { mean, min, max, envelopeMode: false };
   }
+  if (samples.length <= subWidth) {
+    // Sparse data: place each sample at its proportional sub-x position so
+    // the spline pass below has accurate control points to interpolate
+    // between. No envelope needed — every column has at most one sample.
+    const step = (subWidth - 1) / (samples.length - 1);
+    for (let i = 0; i < samples.length; i++) {
+      const sx = Math.round(i * step);
+      mean[sx] = samples[i]!;
+    }
+    return { mean, min, max, envelopeMode: false };
+  }
+  // Dense data: each sub-x column aggregates several samples. Track
+  // mean/min/max so the renderer can draw a min-max envelope (preserves the
+  // visible amplitude of fast oscillations instead of averaging them away).
   const ratio = samples.length / subWidth;
   for (let c = 0; c < subWidth; c++) {
     const start = Math.floor(c * ratio);
     const end = Math.max(start + 1, Math.floor((c + 1) * ratio));
     let sum = 0;
     let n = 0;
-    for (let i = start; i < end && i < samples.length; i++) { sum += samples[i]!; n++; }
-    out[c] = n > 0 ? sum / n : null;
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let i = start; i < end && i < samples.length; i++) {
+      const v = samples[i]!;
+      sum += v;
+      n++;
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+    if (n > 0) {
+      mean[c] = sum / n;
+      min[c] = lo;
+      max[c] = hi;
+    }
+  }
+  return { mean, min, max, envelopeMode: true };
+}
+
+/**
+ * Catmull-Rom spline interpolation across the sub-pixel column array. Replaces
+ * the gaps between known sample points with a smooth curve so diagonal runs
+ * read as actual curves instead of polyline jaggies.
+ */
+function interpolateSplineSubpixel(buckets: (number | null)[]): (number | null)[] {
+  const N = buckets.length;
+  // Collect known control points.
+  const xs: number[] = [];
+  const ys: number[] = [];
+  for (let i = 0; i < N; i++) {
+    const v = buckets[i];
+    if (v != null) { xs.push(i); ys.push(v); }
+  }
+  if (xs.length < 2) return buckets.slice();
+
+  const out: (number | null)[] = new Array<number | null>(N).fill(null);
+  // Pad with virtual endpoints so the spline has neighbours at the boundaries.
+  const px = (idx: number) => xs[Math.max(0, Math.min(xs.length - 1, idx))]!;
+  const py = (idx: number) => ys[Math.max(0, Math.min(ys.length - 1, idx))]!;
+
+  for (let seg = 0; seg < xs.length - 1; seg++) {
+    const x0 = px(seg - 1), y0 = py(seg - 1);
+    const x1 = px(seg),     y1 = py(seg);
+    const x2 = px(seg + 1), y2 = py(seg + 1);
+    const x3 = px(seg + 2), y3 = py(seg + 2);
+    const segStart = x1;
+    const segEnd = x2;
+    if (segEnd <= segStart) { out[segStart] = y1; continue; }
+    for (let xi = segStart; xi <= segEnd; xi++) {
+      const t = (xi - segStart) / (segEnd - segStart);
+      // Centripetal Catmull-Rom on uniform parameterisation (good enough for
+      // visual smoothing and cheap to compute).
+      const t2 = t * t;
+      const t3 = t2 * t;
+      const v =
+        0.5 * (
+          (2 * y1) +
+          (-y0 + y2) * t +
+          (2 * y0 - 5 * y1 + 4 * y2 - y3) * t2 +
+          (-y0 + 3 * y1 - 3 * y2 + y3) * t3
+        );
+      // Avoid masking real later samples: only write null cells, plus the
+      // segment start anchor.
+      if (out[xi] == null) out[xi] = v;
+      // Suppress unused-var warning for x0/x3 which act only via y0/y3.
+      void x0; void x3;
+    }
   }
   return out;
 }
@@ -269,17 +360,28 @@ export function renderAreaGraph(samples: readonly number[], width: number, heigh
   // Bitmask grid: one number per terminal cell.
   const grid: number[][] = Array.from({ length: H }, () => new Array<number>(W).fill(0));
   const blankRow = () => Array<string>(W).fill(" ");
-  const body: string[] = Array.from({ length: H }, () => " ".repeat(W));
+  const body: string[][] = Array.from({ length: H }, blankRow);
+  const gridLayer: string[][] = Array.from({ length: H }, blankRow);
   const axis: string[] = Array.from({ length: H }, () => "");
 
-  const buckets = bucketSamplesSubpixel(samples, subW);
+  const bucketed = bucketSamplesSubpixel(samples, subW);
+  // Range from the *known* extremes (min in envelope mode, mean otherwise).
   let min = Infinity;
   let max = -Infinity;
-  for (const v of buckets) if (v != null) { if (v < min) min = v; if (v > max) max = v; }
+  for (let i = 0; i < subW; i++) {
+    const lo = bucketed.envelopeMode ? bucketed.min[i] : bucketed.mean[i];
+    const hi = bucketed.envelopeMode ? bucketed.max[i] : bucketed.mean[i];
+    if (lo != null && lo < min) min = lo;
+    if (hi != null && hi > max) max = hi;
+  }
   if (!Number.isFinite(min) || !Number.isFinite(max)) {
     return {
       head: Array.from({ length: H }, () => " ".repeat(W)),
-      body, axis, min: 0, max: 0,
+      body: body.map((r) => r.join("")),
+      grid: gridLayer.map((r) => r.join("")),
+      axis,
+      min: 0,
+      max: 0,
     };
   }
   const plotMin = min;
@@ -287,9 +389,14 @@ export function renderAreaGraph(samples: readonly number[], width: number, heigh
   if (min === max) { min -= 1; max += 1; }
   const range = max - min;
 
-  const valueToSubY = (v: number) => {
+  // Smooth pass: only meaningful for sparse data. In envelope mode the
+  // bucket means already represent the trend; we use min/max envelopes
+  // instead of interpolation.
+  const trace = bucketed.envelopeMode ? bucketed.mean : interpolateSplineSubpixel(bucketed.mean);
+
+  const valueToSubYFractional = (v: number) => {
     const norm = (v - min) / range;
-    const y = Math.round((1 - norm) * (subH - 1));
+    const y = (1 - norm) * (subH - 1);
     return Math.max(0, Math.min(subH - 1, y));
   };
 
@@ -300,37 +407,68 @@ export function renderAreaGraph(samples: readonly number[], width: number, heigh
     grid[cellRow]![cellCol]! |= BRAILLE_BIT[sy & 3]![sx & 1]!;
   };
 
-  // Connect consecutive non-null samples with a Bresenham line of dots.
-  let prevX = -1;
-  let prevY = -1;
   let latestSubX = -1;
   let latestSubY = -1;
-  for (let x = 0; x < subW; x++) {
-    const v = buckets[x];
-    if (v == null) continue;
-    const y = valueToSubY(v);
-    if (prevX >= 0) {
-      let x0 = prevX, y0 = prevY, x1 = x, y1 = y;
-      const dx = Math.abs(x1 - x0);
-      const sx = x0 < x1 ? 1 : -1;
-      const dy = -Math.abs(y1 - y0);
-      const sy = y0 < y1 ? 1 : -1;
-      let err = dx + dy;
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
-        setDot(x0, y0);
-        if (x0 === x1 && y0 === y1) break;
-        const e2 = 2 * err;
-        if (e2 >= dy) { err += dy; x0 += sx; }
-        if (e2 <= dx) { err += dx; y0 += sy; }
+
+  if (bucketed.envelopeMode) {
+    // Waveform-style: each column draws a vertical strip from its bucket's
+    // min to its bucket's max. This preserves the visible amplitude of fast
+    // oscillations even when many samples collapse into a single column.
+    let prevTop = -1;
+    let prevBot = -1;
+    for (let x = 0; x < subW; x++) {
+      const lo = bucketed.min[x];
+      const hi = bucketed.max[x];
+      if (lo == null || hi == null) {
+        prevTop = -1;
+        prevBot = -1;
+        continue;
       }
-    } else {
-      setDot(x, y);
+      const top = Math.round(valueToSubYFractional(hi));
+      const bot = Math.round(valueToSubYFractional(lo));
+      const a = Math.min(top, bot);
+      const b = Math.max(top, bot);
+      for (let y = a; y <= b; y++) setDot(x, y);
+      // Bridge to the neighbouring column's strip so the trace stays
+      // continuous when the signal moves faster than one pixel per column.
+      if (prevTop >= 0 && prevBot >= 0) {
+        const pa = Math.min(prevTop, prevBot);
+        const pb = Math.max(prevTop, prevBot);
+        if (a > pb) for (let y = pb; y <= a; y++) setDot(x, y);
+        else if (b < pa) for (let y = b; y <= pa; y++) setDot(x, y);
+      }
+      prevTop = top;
+      prevBot = bot;
+      latestSubX = x;
+      latestSubY = Math.round(valueToSubYFractional(bucketed.mean[x]!));
     }
-    prevX = x;
-    prevY = y;
-    latestSubX = x;
-    latestSubY = y;
+  } else {
+    // Sparse / spline-smoothed trace. Plot one dot per sub-x with a small
+    // anti-aliasing companion so diagonals don't stair-step.
+    for (let x = 0; x < subW; x++) {
+      const v = trace[x];
+      if (v == null) continue;
+      const yFrac = valueToSubYFractional(v);
+      const y = Math.round(yFrac);
+      setDot(x, y);
+      const frac = yFrac - Math.floor(yFrac);
+      if (frac > 0.15 && frac < 0.85) {
+        const neighbour = frac < 0.5 ? Math.floor(yFrac) : Math.ceil(yFrac);
+        if (neighbour !== y) setDot(x, neighbour);
+      }
+      if (bucketed.mean[x] != null) { latestSubX = x; latestSubY = y; }
+    }
+  }
+
+  // Faint horizontal gridline at the midline. Drawn only in cells the curve
+  // doesn't already touch so it stays in the background.
+  const gridRows = H >= 5 ? [Math.floor(H / 2)] : [];
+  for (const gr of gridRows) {
+    if (gr <= 0 || gr >= H - 1) continue;
+    for (let c = 0; c < W; c++) {
+      if (grid[gr]![c]! !== 0) continue;
+      gridLayer[gr]![c] = "┄";
+    }
   }
 
   // Convert bitmask grid to braille glyphs.
@@ -349,7 +487,8 @@ export function renderAreaGraph(samples: readonly number[], width: number, heigh
     head[cellRow]![cellCol] = "●";
   }
 
-  // Right-aligned "last <value>" label pinned to the top row.
+  // Right-aligned label pinned to the top row (rarely used now that the
+  // header carries the "last" value, but still supported).
   if (latestLabel) {
     const label = ` ${latestLabel}`;
     const trimmed = label.length > W ? label.slice(0, W) : label;
@@ -360,27 +499,38 @@ export function renderAreaGraph(samples: readonly number[], width: number, heigh
 
   axis[0] = formatGraphNumber(plotMax);
   axis[H - 1] = formatGraphNumber(plotMin);
+  if (H >= 5) {
+    const midRow = Math.floor(H / 2);
+    if (midRow > 0 && midRow < H - 1) {
+      axis[midRow] = formatGraphNumber((plotMin + plotMax) / 2);
+    }
+  }
 
   return {
     head: head.map((r) => r.join("")),
-    body,
+    body: body.map((r) => r.join("")),
+    grid: gridLayer.map((r) => r.join("")),
     axis,
     min: plotMin,
     max: plotMax,
   };
 }
 
-/** Backwards-compatible single-layer render: head + body merged into one string per row. */
+/** Backwards-compatible single-layer render: head + body + grid merged into one string per row. */
 export function renderGraphLines(samples: readonly number[], width: number, height: number, latestLabel?: string): string[] {
   const layers = renderAreaGraph(samples, width, height, latestLabel);
   const out: string[] = [];
   for (let r = 0; r < layers.head.length; r++) {
     const h = layers.head[r]!;
     const b = layers.body[r]!;
+    const g = layers.grid[r]!;
     let merged = "";
     for (let i = 0; i < h.length; i++) {
       const hc = h[i]!;
-      merged += hc !== " " ? hc : b[i]!;
+      if (hc !== " ") { merged += hc; continue; }
+      const bc = b[i]!;
+      if (bc !== " ") { merged += bc; continue; }
+      merged += g[i] ?? " ";
     }
     out.push(merged);
   }

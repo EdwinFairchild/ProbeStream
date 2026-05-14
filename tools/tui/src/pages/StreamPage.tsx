@@ -51,16 +51,18 @@ interface Props {
 export type StreamChannelLayout = "single" | "merge" | "split";
 
 /**
- * Build a single styled row from the head + body layers of an area chart.
- * Head cells (the curve edge) get the bright colour; body cells (the fill
- * below the curve) get the dim colour. Spaces stay uncoloured. Consecutive
- * cells with the same colour are merged into one chunk to keep the chunk
- * count small.
+ * Build a single styled row from the head + body + grid layers of an area
+ * chart. Head cells (the curve outline) get the bright colour; body cells
+ * (the filled area below the curve) get the dim colour; grid cells (faint
+ * horizontal rules in empty space above the curve) get the muted colour.
+ * Spaces stay uncoloured. Consecutive cells of the same kind are merged into
+ * one chunk to keep the chunk count small.
  */
-function composeAreaRow(head: string, body: string, headColor: string, bodyColor: string): StyledText {
-  const len = Math.max(head.length, body.length);
-  const chunks: { kind: "head" | "body" | "blank"; text: string }[] = [];
-  let runKind: "head" | "body" | "blank" | null = null;
+function composeAreaRow(head: string, body: string, grid: string, headColor: string, bodyColor: string, gridColor: string): StyledText {
+  const len = Math.max(head.length, body.length, grid.length);
+  type Kind = "head" | "body" | "grid" | "blank";
+  const chunks: { kind: Kind; text: string }[] = [];
+  let runKind: Kind | null = null;
   let runStart = 0;
   const flush = (endIdx: number) => {
     if (runKind === null || endIdx <= runStart) return;
@@ -68,13 +70,16 @@ function composeAreaRow(head: string, body: string, headColor: string, bodyColor
       ? head.slice(runStart, endIdx)
       : runKind === "body"
         ? body.slice(runStart, endIdx)
-        : " ".repeat(endIdx - runStart);
+        : runKind === "grid"
+          ? grid.slice(runStart, endIdx)
+          : " ".repeat(endIdx - runStart);
     chunks.push({ kind: runKind, text: slice });
   };
   for (let i = 0; i < len; i++) {
     const h = head[i] ?? " ";
     const b = body[i] ?? " ";
-    const kind: "head" | "body" | "blank" = h !== " " ? "head" : b !== " " ? "body" : "blank";
+    const g = grid[i] ?? " ";
+    const kind: Kind = h !== " " ? "head" : b !== " " ? "body" : g !== " " ? "grid" : "blank";
     if (kind !== runKind) {
       flush(i);
       runKind = kind;
@@ -85,6 +90,7 @@ function composeAreaRow(head: string, body: string, headColor: string, bodyColor
   return new StyledText(chunks.map((c) => {
     if (c.kind === "head") return fg(headColor)(c.text);
     if (c.kind === "body") return fg(bodyColor)(c.text);
+    if (c.kind === "grid") return fg(gridColor)(c.text);
     return { __isChunk: true, text: c.text } as const;
   }));
 }
@@ -570,7 +576,7 @@ export function StreamPage({
             {layers.head.map((headLine, index) => (
               <box key={index} style={{ flexDirection: "row", flexShrink: 0 }}>
                 <text style={{ fg: theme.textDim, flexShrink: 0 }} content={(layers.axis[index] ?? "").padStart(AXIS_WIDTH, " ") + " "} />
-                <text style={{ flexShrink: 0 }} content={composeAreaRow(headLine, layers.body[index] ?? "", theme.accent, theme.primary)} />
+                <text style={{ flexShrink: 0 }} content={composeAreaRow(headLine, layers.body[index] ?? "", layers.grid[index] ?? "", theme.accent, theme.accentDim, theme.muted)} />
               </box>
             ))}
           </>

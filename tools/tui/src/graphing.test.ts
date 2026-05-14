@@ -68,12 +68,18 @@ describe("graphing helpers", () => {
     const layers = renderAreaGraph(samples, 30, 5, "last 9.99");
     expect(layers.head).toHaveLength(5);
     expect(layers.body).toHaveLength(5);
+    expect(layers.grid).toHaveLength(5);
     // Head should contain braille dot glyphs from the curve.
     expect(/[\u2800-\u28FF]/.test(layers.head.join("\n"))).toBe(true);
-    // Min/max axis labels populated only at the extremes.
+    // Body layer is reserved for area-fill renderers; the dot renderer
+    // leaves it blank so the curve reads as a clean trace.
+    expect(layers.body.every((row) => /^\s*$/.test(row))).toBe(true);
+    // Min, mid, and max axis labels populated; the rows just inside the
+    // extremes stay blank.
     expect(layers.axis[0]).not.toBe("");
     expect(layers.axis[layers.axis.length - 1]).not.toBe("");
     expect(layers.axis[1]).toBe("");
+    expect(layers.axis[Math.floor(5 / 2)]).not.toBe("");
     // Latest label survived the head pass.
     expect(layers.head.join("\n")).toContain("last 9.99");
   });
